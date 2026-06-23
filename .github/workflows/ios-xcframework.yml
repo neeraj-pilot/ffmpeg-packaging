@@ -1,0 +1,57 @@
+name: iOS XCFramework
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FFMPEG_PACKAGING_TEST_ROOT: ${{ github.workspace }}-test
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select pinned Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          source versions.env
+          xcode_path="/Applications/Xcode_${XCODE_VERSION}.app/Contents/Developer"
+          if [ -d "$xcode_path" ]; then
+            sudo xcode-select -s "$xcode_path"
+          else
+            echo "Xcode $XCODE_VERSION is not installed on this runner." >&2
+            ls -1 /Applications | grep '^Xcode' || true
+            exit 1
+          fi
+          xcodebuild -version
+
+      - name: Install host tools
+        run: |
+          brew update
+          brew install autoconf automake libtool pkg-config ripgrep
+
+      - name: Build iOS targets
+        run: |
+          scripts/build-mobile.sh ios-device-arm64
+          scripts/build-mobile.sh ios-sim-arm64
+
+      - name: Package and verify xcframework
+        run: scripts/verify-mobile.sh --target ios-device-arm64 --target ios-sim-arm64
+
+      - name: Upload iOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-ios-xcframework
+          path: |
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/mobile/ios/ffmpeg.xcframework.tar.gz
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/mobile/ios/ffmpeg.xcframework.tar.gz.sha256
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/mobile/ios/ffmpeg.xcframework.manifest.env
+          if-no-files-found: error

@@ -1,0 +1,286 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, for example ffmpeg-8.1.2-pilot.1
+        required: true
+        default: ffmpeg-8.1.2-pilot.1
+      prerelease:
+        description: Mark the GitHub release as a prerelease
+        required: true
+        default: "true"
+
+permissions:
+  contents: write
+
+env:
+  FFMPEG_PACKAGING_TEST_ROOT: ${{ github.workspace }}-test
+
+jobs:
+  android:
+    name: Android AAR
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf automake curl git libtool make pkg-config ripgrep xz-utils zip
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install pinned Android NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          source versions.env
+          set +o pipefail
+          yes | sdkmanager --licenses >/dev/null
+          set -o pipefail
+          sdkmanager "ndk;$ANDROID_NDK_VERSION"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+
+      - name: Build Android targets
+        run: |
+          scripts/build-mobile.sh android-arm64
+          scripts/build-mobile.sh android-armv7
+
+      - name: Package and verify AAR
+        run: scripts/verify-mobile.sh --target android-arm64 --target android-armv7
+
+      - name: Upload Android assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-android
+          path: |
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/mobile/android/ffmpeg.aar
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/mobile/android/ffmpeg.aar.sha256
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/mobile/android/ffmpeg.aar.manifest.env
+          if-no-files-found: error
+
+  ios:
+    name: iOS XCFramework
+    runs-on: macos-latest
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select pinned Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          source versions.env
+          xcode_path="/Applications/Xcode_${XCODE_VERSION}.app/Contents/Developer"
+          if [ -d "$xcode_path" ]; then
+            sudo xcode-select -s "$xcode_path"
+          else
+            echo "Xcode $XCODE_VERSION is not installed on this runner." >&2
+            ls -1 /Applications | grep '^Xcode' || true
+            exit 1
+          fi
+          xcodebuild -version
+
+      - name: Install host tools
+        run: |
+          brew update
+          brew install autoconf automake libtool pkg-config ripgrep
+
+      - name: Build iOS targets
+        run: |
+          scripts/build-mobile.sh ios-device-arm64
+          scripts/build-mobile.sh ios-sim-arm64
+
+      - name: Package and verify xcframework
+        run: scripts/verify-mobile.sh --target ios-device-arm64 --target ios-sim-arm64
+
+      - name: Upload iOS assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-ios
+          path: |
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/mobile/ios/ffmpeg.xcframework.tar.gz
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/mobile/ios/ffmpeg.xcframework.tar.gz.sha256
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/mobile/ios/ffmpeg.xcframework.manifest.env
+          if-no-files-found: error
+
+  desktop-linux-x64:
+    name: Desktop Linux x64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host tools and libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf automake curl g++ git libtool make nasm pkg-config ripgrep \
+            xz-utils zlib1g-dev
+
+      - name: Build desktop CLI
+        run: scripts/build-desktop-cli.sh desktop-linux-x64
+
+      - name: Verify desktop CLI
+        run: scripts/verify-desktop-cli.sh "$FFMPEG_PACKAGING_TEST_ROOT/dist/desktop/linux-x64"
+
+      - name: Upload desktop assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-desktop-linux-x64
+          path: |
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/desktop/linux-x64/ffmpeg.tar.gz
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/desktop/linux-x64/ffmpeg.tar.gz.sha256
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/desktop/linux-x64/ffmpeg.tar.gz.manifest.env
+          if-no-files-found: error
+
+  desktop-macos-universal:
+    name: Desktop macOS universal
+    runs-on: macos-latest
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select pinned Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          source versions.env
+          xcode_path="/Applications/Xcode_${XCODE_VERSION}.app/Contents/Developer"
+          if [ -d "$xcode_path" ]; then
+            sudo xcode-select -s "$xcode_path"
+          else
+            echo "Xcode $XCODE_VERSION is not installed on this runner." >&2
+            ls -1 /Applications | grep '^Xcode' || true
+            exit 1
+          fi
+          xcodebuild -version
+
+      - name: Install host tools and libraries
+        run: |
+          brew update
+          brew install autoconf automake libtool nasm pkg-config ripgrep
+
+      - name: Build desktop CLI
+        run: scripts/build-desktop-cli.sh desktop-darwin-universal
+
+      - name: Verify desktop CLI
+        run: scripts/verify-desktop-cli.sh "$FFMPEG_PACKAGING_TEST_ROOT/dist/desktop/darwin-universal"
+
+      - name: Upload desktop assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-desktop-darwin-universal
+          path: |
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/desktop/darwin-universal/ffmpeg.tar.gz
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/desktop/darwin-universal/ffmpeg.tar.gz.sha256
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/desktop/darwin-universal/ffmpeg.tar.gz.manifest.env
+          if-no-files-found: error
+
+  desktop-windows-x64:
+    name: Desktop Windows x64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host tools and libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf automake binutils-mingw-w64-x86-64 curl g++ git \
+            g++-mingw-w64-x86-64 gcc-mingw-w64-x86-64 libtool \
+            libz-mingw-w64-dev make nasm pkg-config ripgrep unzip xz-utils zip
+          sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix
+          sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix
+
+      - name: Build desktop CLI
+        run: scripts/build-desktop-cli.sh desktop-windows-x64
+
+      - name: Verify desktop archive
+        run: scripts/verify-desktop-windows.sh "$FFMPEG_PACKAGING_TEST_ROOT/dist/desktop/windows-x64" desktop-windows-x64
+
+      - name: Upload desktop assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-desktop-windows-x64
+          path: |
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/desktop/windows-x64/ffmpeg.zip
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/desktop/windows-x64/ffmpeg.zip.sha256
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/desktop/windows-x64/ffmpeg.zip.manifest.env
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    runs-on: ubuntu-24.04
+    needs:
+      - android
+      - ios
+      - desktop-linux-x64
+      - desktop-macos-universal
+      - desktop-windows-x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag }}
+          PRERELEASE: ${{ github.event.inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-upload
+          cp release-assets/release-android/ffmpeg.aar release-upload/android-ffmpeg.aar
+          cp release-assets/release-android/ffmpeg.aar.sha256 release-upload/android-ffmpeg.aar.sha256
+          cp release-assets/release-android/ffmpeg.aar.manifest.env release-upload/android-ffmpeg.aar.manifest.env
+
+          cp release-assets/release-ios/ffmpeg.xcframework.tar.gz release-upload/ios-ffmpeg.xcframework.tar.gz
+          cp release-assets/release-ios/ffmpeg.xcframework.tar.gz.sha256 release-upload/ios-ffmpeg.xcframework.tar.gz.sha256
+          cp release-assets/release-ios/ffmpeg.xcframework.manifest.env release-upload/ios-ffmpeg.xcframework.manifest.env
+
+          cp release-assets/release-desktop-linux-x64/ffmpeg.tar.gz release-upload/linux-x64-ffmpeg.tar.gz
+          cp release-assets/release-desktop-linux-x64/ffmpeg.tar.gz.sha256 release-upload/linux-x64-ffmpeg.tar.gz.sha256
+          cp release-assets/release-desktop-linux-x64/ffmpeg.tar.gz.manifest.env release-upload/linux-x64-ffmpeg.tar.gz.manifest.env
+
+          cp release-assets/release-desktop-darwin-universal/ffmpeg.tar.gz release-upload/darwin-universal-ffmpeg.tar.gz
+          cp release-assets/release-desktop-darwin-universal/ffmpeg.tar.gz.sha256 release-upload/darwin-universal-ffmpeg.tar.gz.sha256
+          cp release-assets/release-desktop-darwin-universal/ffmpeg.tar.gz.manifest.env release-upload/darwin-universal-ffmpeg.tar.gz.manifest.env
+
+          cp release-assets/release-desktop-windows-x64/ffmpeg.zip release-upload/windows-x64-ffmpeg.zip
+          cp release-assets/release-desktop-windows-x64/ffmpeg.zip.sha256 release-upload/windows-x64-ffmpeg.zip.sha256
+          cp release-assets/release-desktop-windows-x64/ffmpeg.zip.manifest.env release-upload/windows-x64-ffmpeg.zip.manifest.env
+
+          mapfile -t assets < <(find release-upload -type f | sort)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "No release assets were produced." >&2
+            exit 1
+          fi
+
+          notes="$(cat <<NOTES
+          Pilot FFmpeg packaging release from workflow run $GITHUB_RUN_ID.
+
+          Includes Android AAR, iOS xcframework, Linux x64 CLI, macOS universal CLI, and Windows x64 CLI artifacts.
+          NOTES
+          )"
+          args=(release create "$TAG" --title "$TAG" --notes "$notes")
+          if [ "$PRERELEASE" = "true" ]; then
+            args+=(--prerelease)
+          fi
+          gh "${args[@]}" "${assets[@]}"

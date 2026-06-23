@@ -1,0 +1,93 @@
+name: Validate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FFMPEG_PACKAGING_TEST_ROOT: ${{ github.workspace }}-test
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang \
+            curl \
+            patch \
+            ripgrep \
+            xz-utils
+
+      - name: Shell syntax
+        run: bash -n scripts/*.sh tests/ffi_harness/run-mobile-harness.sh
+
+      - name: Reject local placeholders
+        shell: bash
+        run: |
+          set -euo pipefail
+          scan_paths=(README.md docs include patches scripts src tests versions.env)
+          set +e
+          rg -n "/Vol""umes|/Us""ers/|TO""DO|FIX""ME" "${scan_paths[@]}"
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            exit 1
+          fi
+          if [ "$status" -gt 1 ]; then
+            exit "$status"
+          fi
+
+      - name: Check public header ABI
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! rg -n "struct FfmpegFfiSession[[:space:]]*\\{" include/ffmpeg_ffi.h
+          ci_work="$FFMPEG_PACKAGING_TEST_ROOT/work/ci"
+          mkdir -p "$ci_work"
+          cat > "$ci_work/header-smoke.c" <<'EOF'
+          #include "include/ffmpeg_ffi.h"
+
+          int main(void) {
+              FfmpegFfiSession *session = ffmpeg_session_new(0, 0);
+              ffmpeg_cancel(session);
+              ffmpeg_session_free(session);
+              return 0;
+          }
+          EOF
+          clang -fsyntax-only -I. "$ci_work/header-smoke.c"
+          clang -fsyntax-only -Iinclude tests/ffi_harness/ffmpeg_ffi_harness.c
+
+      - name: Check FFmpeg patch and wrapper source
+        shell: bash
+        run: |
+          set -euo pipefail
+          source versions.env
+          ci_work="$FFMPEG_PACKAGING_TEST_ROOT/work/ci"
+          mkdir -p "$ci_work"
+          curl -fL "$FFMPEG_URL" -o "$ci_work/ffmpeg-$FFMPEG_VERSION.tar.xz"
+          printf '%s  %s\n' "$FFMPEG_SHA256" "$ci_work/ffmpeg-$FFMPEG_VERSION.tar.xz" | sha256sum -c -
+          tar -xf "$ci_work/ffmpeg-$FFMPEG_VERSION.tar.xz" -C "$ci_work"
+          ffmpeg_tree="$ci_work/ffmpeg-$FFMPEG_VERSION"
+          scripts/validate-fftools-state-audit.sh "$ffmpeg_tree"
+          (cd "$ffmpeg_tree" && patch -p1 --dry-run < "$GITHUB_WORKSPACE/patches/ffmpeg-8.1/ffmpeg-ffi-boundary.patch")
+          (
+            cd "$ffmpeg_tree"
+            patch -p1 < "$GITHUB_WORKSPACE/patches/ffmpeg-8.1/ffmpeg-ffi-boundary.patch"
+            ./configure --disable-x86asm --disable-doc --disable-ffplay --disable-ffprobe >/dev/null
+            make -j2 ffmpeg >/dev/null
+          )
+          clang -fsyntax-only -I"$ffmpeg_tree" src/ffmpeg_ffi_probe.c

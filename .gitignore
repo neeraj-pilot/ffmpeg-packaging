@@ -1,0 +1,10 @@
+dist/
+build/
+work/
+sources/
+downloads/
+ffbuild/
+.dart_tool/
+.DS_Store
+*.log
+*.tmp
