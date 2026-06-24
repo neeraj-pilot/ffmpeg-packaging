@@ -57,8 +57,9 @@ Flutter wrapper.
 
 `ffmpeg_ffi_reset_run_state(...)` resets command globals in `fftools/ffmpeg.c`.
 
-`ffmpeg_ffi_reset_options_state(...)` resets option globals in
-`fftools/ffmpeg_opt.c`, including:
+Option globals are reset before each embedded run. Most are reset directly by
+`ffmpeg_ffi_reset_run_state(...)`; the static overwrite flags in
+`fftools/ffmpeg_opt.c` are reset by `ffmpeg_ffi_reset_options_state(...)`:
 
 - `file_overwrite`
 - `no_file_overwrite`
@@ -67,8 +68,8 @@ Flutter wrapper.
 This fixes the important embedded-process leak where one `-y` or `-n` command
 could change overwrite behavior for a later command.
 
-The audited state list below is checked by
-`scripts/validate-fftools-state-audit.sh`.
+The audited state list below is checked against both the pinned upstream source
+and the patched reset functions by `scripts/validate-fftools-state-audit.sh`.
 
 ### Signal And Terminal Safety
 

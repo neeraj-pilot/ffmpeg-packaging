@@ -29,11 +29,14 @@ jobs:
             clang \
             curl \
             patch \
+            python3 \
             ripgrep \
             xz-utils
 
       - name: Shell syntax
-        run: bash -n scripts/*.sh tests/ffi_harness/run-mobile-harness.sh
+        run: |
+          bash -n scripts/*.sh tests/ffi_harness/run-mobile-harness.sh
+          python3 -m py_compile tests/desktop_cli/verify_media.py
 
       - name: Reject local placeholders
         shell: bash

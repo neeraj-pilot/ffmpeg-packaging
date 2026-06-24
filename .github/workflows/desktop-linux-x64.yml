@@ -11,7 +11,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 120
 
     steps:
@@ -24,6 +24,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             autoconf \
             automake \
+            binutils \
             curl \
             g++ \
             git \
@@ -31,6 +32,7 @@ jobs:
             make \
             nasm \
             pkg-config \
+            python3 \
             ripgrep \
             xz-utils \
             zlib1g-dev

@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag, for example ffmpeg-8.1.2-pilot.1
+        description: Release tag, for example ffmpeg-8.1.2-pilot.2
         required: true
-        default: ffmpeg-8.1.2-pilot.1
+        default: ffmpeg-8.1.2-pilot.2
       prerelease:
         description: Mark the GitHub release as a prerelease
         required: true
@@ -73,6 +73,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Select pinned Xcode
         shell: bash
         run: |
@@ -113,7 +118,7 @@ jobs:
 
   desktop-linux-x64:
     name: Desktop Linux x64
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 120
 
     steps:
@@ -123,8 +128,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            autoconf automake curl g++ git libtool make nasm pkg-config ripgrep \
-            xz-utils zlib1g-dev
+            autoconf automake binutils curl g++ git libtool make nasm pkg-config ripgrep \
+            python3 xz-utils zlib1g-dev
 
       - name: Build desktop CLI
         run: scripts/build-desktop-cli.sh desktop-linux-x64
@@ -149,6 +154,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: Select pinned Xcode
         shell: bash
@@ -220,6 +230,70 @@ jobs:
             ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/desktop/windows-x64/ffmpeg.zip.manifest.env
           if-no-files-found: error
 
+  desktop-macos-universal-intel-runtime:
+    name: Desktop macOS universal Intel runtime
+    runs-on: macos-15-intel
+    needs:
+      - desktop-macos-universal
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install host tools
+        run: brew install ripgrep
+
+      - name: Download macOS desktop artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-desktop-darwin-universal
+          path: release-desktop-darwin-universal
+
+      - name: Verify x64 slice on Intel runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifact
+          tar -xzf release-desktop-darwin-universal/ffmpeg.tar.gz -C artifact
+          scripts/verify-desktop-cli.sh "$PWD/artifact"
+
+  desktop-windows-x64-runtime:
+    name: Desktop Windows x64 runtime
+    runs-on: windows-2022
+    needs:
+      - desktop-windows-x64
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download Windows desktop artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-desktop-windows-x64
+          path: release-desktop-windows-x64
+
+      - name: Verify Windows binaries
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifact | Out-Null
+          Expand-Archive -Path release-desktop-windows-x64/ffmpeg.zip -DestinationPath artifact -Force
+          python tests/desktop_cli/verify_media.py `
+            --ffmpeg artifact/ffmpeg.exe `
+            --ffprobe artifact/ffprobe.exe `
+            --work-dir "$env:FFMPEG_PACKAGING_TEST_ROOT/work" `
+            --target windows-x64
+
   publish:
     name: Publish GitHub release
     runs-on: ubuntu-24.04
@@ -229,6 +303,8 @@ jobs:
       - desktop-linux-x64
       - desktop-macos-universal
       - desktop-windows-x64
+      - desktop-macos-universal-intel-runtime
+      - desktop-windows-x64-runtime
 
     steps:
       - uses: actions/checkout@v4

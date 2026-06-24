@@ -24,6 +24,7 @@ FFmpeg names.
 - `src/`: mobile wrapper support code that does not patch FFmpeg
 - `patches/`: reviewable FFmpeg source patches
 - `docs/mobile-fftools-patch.md`: why the mobile `fftools` patch exists
+- `tests/desktop_cli/`: desktop CLI media verification
 - `tests/ffi_harness/`: native mobile runtime harness
 
 Generated files are written outside the repo by default:
@@ -68,7 +69,34 @@ GitHub Release assets use platform-prefixed filenames because release assets
 share one flat namespace, for example `linux-x64-ffmpeg.tar.gz`. Files under
 `dist/` keep the generic artifact names listed above.
 
+Linux x64 is built on Ubuntu 22.04 and gated by `DESKTOP_LINUX_MAX_GLIBC`
+from `versions.env`. The old `ffmpeg-static` dependency used John Van Sickle
+static Linux builds with an older glibc baseline; this repo keeps pinned
+sources and avoids a fully static glibc build, but must not drift back to
+Ubuntu 24.04-only binaries.
+
 Linux arm64 and Windows arm64 are script targets, but are not release-gated yet.
+
+Desktop binary locations:
+
+| Target | Build input | Build output | Release asset | Release-test location |
+| --- | --- | --- | --- | --- |
+| Linux x64 | pinned source | `../ffmpeg-packaging-test/dist/desktop/linux-x64/ffmpeg.tar.gz` | `linux-x64-ffmpeg.tar.gz` | `../ffmpeg-packaging-test/release-assets/<tag>/linux-x64/` |
+| Linux arm64 | pinned source | `../ffmpeg-packaging-test/dist/desktop/linux-arm64/ffmpeg.tar.gz` | `linux-arm64-ffmpeg.tar.gz` | `../ffmpeg-packaging-test/release-assets/<tag>/linux-arm64/` |
+| macOS universal | pinned source | `../ffmpeg-packaging-test/dist/desktop/darwin-universal/ffmpeg.tar.gz` | `darwin-universal-ffmpeg.tar.gz` | `../ffmpeg-packaging-test/release-assets/<tag>/darwin-universal/` |
+| Windows x64 | pinned source | `../ffmpeg-packaging-test/dist/desktop/windows-x64/ffmpeg.zip` | `windows-x64-ffmpeg.zip` | `../ffmpeg-packaging-test/release-assets/<tag>/windows-x64/` |
+| Windows arm64 | pinned source | `../ffmpeg-packaging-test/dist/desktop/windows-arm64/ffmpeg.zip` | `windows-arm64-ffmpeg.zip` | `../ffmpeg-packaging-test/release-assets/<tag>/windows-arm64/` |
+
+Desktop release assets are never used as build inputs. To validate already
+published desktop assets, download them into the sibling test directory:
+
+```sh
+scripts/download-release-desktop-assets.sh <tag> linux-x64 darwin-universal windows-x64
+```
+
+Then run the desktop verifier against the extracted binaries. The
+`desktop-release-assets.yml` workflow does this on native runners where
+possible.
 
 ## Validation
 
@@ -76,8 +104,18 @@ Fast source checks:
 
 ```sh
 bash -n scripts/*.sh tests/ffi_harness/run-mobile-harness.sh
+python3 -m py_compile tests/desktop_cli/verify_media.py
 scripts/validate-fftools-state-audit.sh <ffmpeg-source-tree>
 ```
+
+Desktop CLI checks:
+
+```sh
+scripts/verify-desktop-cli.sh ../ffmpeg-packaging-test/dist/desktop/linux-x64
+```
+
+The desktop verifier covers build flags, MP4 encode, `ffprobe` JSON, zscale,
+tonemap, and Photos-shaped encrypted single-file HLS generation.
 
 Runtime harnesses:
 

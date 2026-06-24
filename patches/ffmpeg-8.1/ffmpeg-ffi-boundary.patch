@@ -1,6 +1,6 @@
 --- a/fftools/ffmpeg.c
 +++ b/fftools/ffmpeg.c
-@@ -144,6 +144,151 @@
+@@ -144,6 +144,152 @@
  static volatile int ffmpeg_exited = 0;
  static int64_t copy_ts_first_pts = AV_NOPTS_VALUE;
  
@@ -102,6 +102,7 @@
 +    atomic_store(&transcode_init_done, 0);
 +    ffmpeg_exited = 0;
 +    copy_ts_first_pts = AV_NOPTS_VALUE;
++    current_time = (BenchmarkTimeStamps){ 0 };
 +    ffmpeg_ffi_report_last_time = -1;
 +    ffmpeg_ffi_report_first_report = 1;
 +    ffmpeg_ffi_reset_options_state(embedded);

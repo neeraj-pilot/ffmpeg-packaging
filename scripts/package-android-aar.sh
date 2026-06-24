@@ -31,7 +31,7 @@ require_executable "$readelf_bin"
 reset_dir "$stage"
 mkdir -p "$stage/jni/arm64-v8a" "$stage/jni/armeabi-v7a" "$(dirname "$output")"
 cat > "$stage/AndroidManifest.xml" <<'EOF'
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" />
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.ffmpeg.ffi" />
 EOF
 
 copy_abi() {

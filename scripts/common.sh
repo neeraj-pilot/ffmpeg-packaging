@@ -44,7 +44,19 @@ require_executable() {
 }
 
 sha256_file() {
-  shasum -a 256 "$1" | awk '{print $1}'
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+    return
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+    return
+  fi
+  if command -v certutil >/dev/null 2>&1; then
+    certutil -hashfile "$1" SHA256 | awk 'NR == 2 {print tolower($0)}'
+    return
+  fi
+  die "missing sha256 tool"
 }
 
 verify_sha256() {
