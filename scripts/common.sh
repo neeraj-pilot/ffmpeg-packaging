@@ -53,7 +53,8 @@ sha256_file() {
     return
   fi
   if command -v certutil >/dev/null 2>&1; then
-    certutil -hashfile "$1" SHA256 | awk 'NR == 2 {print tolower($0)}'
+    certutil -hashfile "$1" SHA256 |
+      awk 'NR == 2 {gsub(/[^0-9A-Fa-f]/, ""); print tolower($0)}'
     return
   fi
   die "missing sha256 tool"

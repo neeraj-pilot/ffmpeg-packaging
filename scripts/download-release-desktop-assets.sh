@@ -74,7 +74,7 @@ for target in "$@"; do
   base_url="https://github.com/$release_repo/releases/download/$tag"
   curl -fL "$base_url/$archive_name" -o "$archive"
   curl -fL "$base_url/$archive_name.sha256" -o "$checksum"
-  expected="$(awk '{print $1}' "$checksum")"
+  expected="$(awk 'NR == 1 {print $1}' "$checksum" | tr -cd '[:xdigit:]')"
   verify_sha256 "$archive" "$expected"
   extract_asset "$target" "$archive"
 
