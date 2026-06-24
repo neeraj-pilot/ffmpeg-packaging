@@ -220,8 +220,8 @@ Embedded mobile commands must not use `-report` or `FFREPORT` until explicit
 cleanup/reset is added for `report_file` and `report_file_level`. `warned_cfg`
 is a one-time warning flag, not media state.
 
-## Release Proof
+## Mobile Release Proof
 
 The mobile runtime harness must pass on Android device and iOS simulator before
-release. Physical iOS device coverage still needs a signed app or Flutter
-harness.
+mobile release promotion. Physical iOS device coverage still needs a signed app
+or Flutter harness.

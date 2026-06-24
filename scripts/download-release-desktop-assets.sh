@@ -10,10 +10,8 @@ Usage:
 
 Targets:
   linux-x64
-  linux-arm64
   darwin-universal
   windows-x64
-  windows-arm64
 
 Downloads GitHub Release desktop assets into:
   FFMPEG_PACKAGING_TEST_ROOT/release-assets/<tag>/<target>/
@@ -46,10 +44,8 @@ fi
 asset_name() {
   case "$1" in
     linux-x64) printf '%s\n' linux-x64-ffmpeg.tar.gz ;;
-    linux-arm64) printf '%s\n' linux-arm64-ffmpeg.tar.gz ;;
     darwin-universal) printf '%s\n' darwin-universal-ffmpeg.tar.gz ;;
     windows-x64) printf '%s\n' windows-x64-ffmpeg.zip ;;
-    windows-arm64) printf '%s\n' windows-arm64-ffmpeg.zip ;;
     *) die "unknown desktop release target: $1" ;;
   esac
 }

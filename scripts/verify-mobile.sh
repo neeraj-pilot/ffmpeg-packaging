@@ -6,15 +6,12 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/verify-mobile.sh [--target <target>]... [--android-device <id>] [--ios-simulator <udid>]
+  scripts/verify-mobile.sh [--target <target>]...
 
-Runs packaging-level mobile gates. Device runtime harnesses are only run when
-device IDs are provided and a production harness exists under tests/ffi_harness.
+Runs packaging-level mobile gates.
 USAGE
 }
 
-android_device=""
-ios_simulator=""
 targets=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -22,17 +19,6 @@ while [ "$#" -gt 0 ]; do
       target_is_mobile "${2:-}" || die "unknown mobile target: ${2:-}"
       targets+=("$2")
       shift 2
-      ;;
-    --android-device)
-      android_device="${2:-}"
-      shift 2
-      ;;
-    --ios-simulator)
-      ios_simulator="${2:-}"
-      shift 2
-      ;;
-    --ios-device)
-      die "physical iOS device harness is not implemented; use --ios-simulator for simulator coverage"
       ;;
     --help)
       usage
@@ -87,16 +73,6 @@ if [ "$needs_ios" -eq 1 ]; then
   else
     log "skip iOS xcframework packaging; ios-device-arm64 and ios-sim-arm64 are both required"
   fi
-fi
-
-if [ -n "$android_device" ] || [ -n "$ios_simulator" ]; then
-  harness="$REPO_ROOT/tests/ffi_harness/run-mobile-harness.sh"
-  require_file "$harness"
-  [ -x "$harness" ] || die "$harness must be executable"
-  args=()
-  [ -z "$android_device" ] || args+=(--android-device "$android_device")
-  [ -z "$ios_simulator" ] || args+=(--ios-simulator "$ios_simulator")
-  "$harness" "${args[@]}"
 fi
 
 log "mobile verification complete"

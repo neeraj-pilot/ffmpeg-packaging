@@ -7,10 +7,6 @@ on:
         description: Release tag to download and verify
         required: true
         default: ffmpeg-8.1.2-pilot.2
-      include_optional_arm64:
-        description: Also try Linux arm64 and Windows arm64 release assets
-        required: true
-        default: "false"
 
 permissions:
   contents: read
@@ -108,53 +104,3 @@ jobs:
             --ffprobe "$env:FFMPEG_PACKAGING_TEST_ROOT/release-assets/${{ github.event.inputs.tag }}/windows-x64/ffprobe.exe" `
             --work-dir "$env:FFMPEG_PACKAGING_TEST_ROOT/work" `
             --target windows-x64
-
-  linux-arm64:
-    name: Linux arm64 release asset
-    if: ${{ github.event.inputs.include_optional_arm64 == 'true' }}
-    continue-on-error: true
-    runs-on: ubuntu-22.04-arm
-    timeout-minutes: 30
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install host tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            binutils curl python3 ripgrep unzip
-
-      - name: Download release asset
-        run: scripts/download-release-desktop-assets.sh "${{ github.event.inputs.tag }}" linux-arm64
-
-      - name: Verify release asset
-        run: scripts/verify-desktop-cli.sh "$FFMPEG_PACKAGING_TEST_ROOT/release-assets/${{ github.event.inputs.tag }}/linux-arm64"
-
-  windows-arm64:
-    name: Windows arm64 release asset
-    if: ${{ github.event.inputs.include_optional_arm64 == 'true' }}
-    continue-on-error: true
-    runs-on: windows-11-arm
-    timeout-minutes: 30
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Download release asset
-        shell: bash
-        run: scripts/download-release-desktop-assets.sh "${{ github.event.inputs.tag }}" windows-arm64
-
-      - name: Verify release asset
-        shell: pwsh
-        run: |
-          python tests/desktop_cli/verify_media.py `
-            --ffmpeg "$env:FFMPEG_PACKAGING_TEST_ROOT/release-assets/${{ github.event.inputs.tag }}/windows-arm64/ffmpeg.exe" `
-            --ffprobe "$env:FFMPEG_PACKAGING_TEST_ROOT/release-assets/${{ github.event.inputs.tag }}/windows-arm64/ffprobe.exe" `
-            --work-dir "$env:FFMPEG_PACKAGING_TEST_ROOT/work" `
-            --target windows-arm64

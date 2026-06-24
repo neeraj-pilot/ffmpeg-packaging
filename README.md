@@ -70,22 +70,18 @@ share one flat namespace, for example `linux-x64-ffmpeg.tar.gz`. Files under
 `dist/` keep the generic artifact names listed above.
 
 Linux x64 is built on Ubuntu 22.04 and gated by `DESKTOP_LINUX_MAX_GLIBC`
-from `versions.env`. The old `ffmpeg-static` dependency used John Van Sickle
-static Linux builds with an older glibc baseline; this repo keeps pinned
-sources and avoids a fully static glibc build, but must not drift back to
-Ubuntu 24.04-only binaries.
+from `versions.env`; release binaries must not drift to an Ubuntu 24.04-only
+glibc baseline.
 
 Linux arm64 and Windows arm64 are script targets, but are not release-gated yet.
 
 Desktop binary locations:
 
-| Target | Build input | Build output | Release asset | Release-test location |
-| --- | --- | --- | --- | --- |
-| Linux x64 | pinned source | `../ffmpeg-packaging-test/dist/desktop/linux-x64/ffmpeg.tar.gz` | `linux-x64-ffmpeg.tar.gz` | `../ffmpeg-packaging-test/release-assets/<tag>/linux-x64/` |
-| Linux arm64 | pinned source | `../ffmpeg-packaging-test/dist/desktop/linux-arm64/ffmpeg.tar.gz` | `linux-arm64-ffmpeg.tar.gz` | `../ffmpeg-packaging-test/release-assets/<tag>/linux-arm64/` |
-| macOS universal | pinned source | `../ffmpeg-packaging-test/dist/desktop/darwin-universal/ffmpeg.tar.gz` | `darwin-universal-ffmpeg.tar.gz` | `../ffmpeg-packaging-test/release-assets/<tag>/darwin-universal/` |
-| Windows x64 | pinned source | `../ffmpeg-packaging-test/dist/desktop/windows-x64/ffmpeg.zip` | `windows-x64-ffmpeg.zip` | `../ffmpeg-packaging-test/release-assets/<tag>/windows-x64/` |
-| Windows arm64 | pinned source | `../ffmpeg-packaging-test/dist/desktop/windows-arm64/ffmpeg.zip` | `windows-arm64-ffmpeg.zip` | `../ffmpeg-packaging-test/release-assets/<tag>/windows-arm64/` |
+| Target | Build output | Release asset | Release-test location |
+| --- | --- | --- | --- |
+| Linux x64 | `../ffmpeg-packaging-test/dist/desktop/linux-x64/ffmpeg.tar.gz` | `linux-x64-ffmpeg.tar.gz` | `../ffmpeg-packaging-test/release-assets/<tag>/linux-x64/` |
+| macOS universal | `../ffmpeg-packaging-test/dist/desktop/darwin-universal/ffmpeg.tar.gz` | `darwin-universal-ffmpeg.tar.gz` | `../ffmpeg-packaging-test/release-assets/<tag>/darwin-universal/` |
+| Windows x64 | `../ffmpeg-packaging-test/dist/desktop/windows-x64/ffmpeg.zip` | `windows-x64-ffmpeg.zip` | `../ffmpeg-packaging-test/release-assets/<tag>/windows-x64/` |
 
 Desktop release assets are never used as build inputs. To validate already
 published desktop assets, download them into the sibling test directory:
@@ -95,8 +91,8 @@ scripts/download-release-desktop-assets.sh <tag> linux-x64 darwin-universal wind
 ```
 
 Then run the desktop verifier against the extracted binaries. The
-`desktop-release-assets.yml` workflow does this on native runners where
-possible.
+`desktop-release-assets.yml` workflow covers Linux x64, macOS universal on
+Apple Silicon and Intel runners, and Windows x64.
 
 ## Validation
 
@@ -104,11 +100,15 @@ Fast source checks:
 
 ```sh
 bash -n scripts/*.sh tests/ffi_harness/run-mobile-harness.sh
-python3 -m py_compile tests/desktop_cli/verify_media.py
+python3 - <<'PY'
+from pathlib import Path
+path = Path("tests/desktop_cli/verify_media.py")
+compile(path.read_text(encoding="utf-8"), str(path), "exec")
+PY
 scripts/validate-fftools-state-audit.sh <ffmpeg-source-tree>
 ```
 
-Desktop CLI checks:
+Desktop CLI check example:
 
 ```sh
 scripts/verify-desktop-cli.sh ../ffmpeg-packaging-test/dist/desktop/linux-x64
@@ -125,4 +125,4 @@ tests/ffi_harness/run-mobile-harness.sh --ios-simulator <simulator-udid>
 ```
 
 Physical iOS device coverage still needs a signed app or Flutter harness before
-release promotion.
+mobile release promotion.

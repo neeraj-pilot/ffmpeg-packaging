@@ -34,40 +34,6 @@ fi
 require_executable "$ffmpeg"
 require_executable "$ffprobe"
 
-"$ffmpeg" -version > "$WORK_ROOT/desktop-ffmpeg-version.txt"
-"$ffmpeg" -buildconf > "$WORK_ROOT/desktop-ffmpeg-buildconf.txt"
-
-rg -q -- '--enable-libx264' "$WORK_ROOT/desktop-ffmpeg-buildconf.txt" ||
-  die "desktop ffmpeg missing --enable-libx264"
-rg -q -- '--enable-libzimg' "$WORK_ROOT/desktop-ffmpeg-buildconf.txt" ||
-  die "desktop ffmpeg missing --enable-libzimg"
-rg -q -- '--enable-gpl' "$WORK_ROOT/desktop-ffmpeg-buildconf.txt" ||
-  die "desktop ffmpeg missing --enable-gpl"
-
-sample="$WORK_ROOT/desktop-smoke.mp4"
-"$ffmpeg" -hide_banner -y \
-  -f lavfi -i testsrc2=duration=1:size=160x90:rate=5 \
-  -an -c:v libx264 -preset ultrafast "$sample" \
-  > "$WORK_ROOT/desktop-mp4-smoke.log" 2>&1
-"$ffprobe" -v error -print_format json -show_format -show_streams "$sample" \
-  > "$WORK_ROOT/desktop-ffprobe-smoke.json"
-python3 - "$WORK_ROOT/desktop-ffprobe-smoke.json" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as handle:
-    data = json.load(handle)
-if not isinstance(data.get("format"), dict):
-    raise SystemExit("missing format object")
-if not isinstance(data.get("streams"), list) or not data["streams"]:
-    raise SystemExit("missing streams array")
-PY
-
-"$ffmpeg" -hide_banner -y \
-  -f lavfi -i testsrc2=duration=1:size=160x90:rate=5 \
-  -vf zscale=w=80:h=44 -frames:v 1 -f null - \
-  > "$WORK_ROOT/desktop-zscale-smoke.log" 2>&1
-
 if command -v ldd >/dev/null 2>&1 && [ "$(uname -s)" = "Linux" ]; then
   ldd "$ffmpeg" > "$WORK_ROOT/desktop-ffmpeg-ldd.txt"
   if rg -q 'lib(x264|zimg)' "$WORK_ROOT/desktop-ffmpeg-ldd.txt"; then

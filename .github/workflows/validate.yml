@@ -36,7 +36,12 @@ jobs:
       - name: Shell syntax
         run: |
           bash -n scripts/*.sh tests/ffi_harness/run-mobile-harness.sh
-          python3 -m py_compile tests/desktop_cli/verify_media.py
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("tests/desktop_cli/verify_media.py")
+          compile(path.read_text(encoding="utf-8"), str(path), "exec")
+          PY
 
       - name: Reject local placeholders
         shell: bash
