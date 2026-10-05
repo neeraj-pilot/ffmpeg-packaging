@@ -1,0 +1,12 @@
+diff --git a/encoder/encoder.c b/encoder/encoder.c
+--- a/encoder/encoder.c
++++ b/encoder/encoder.c
+@@ -1854,6 +1854,8 @@
+ 
+     return h;
+ fail:
++    if( h )
++        x264_param_cleanup( &h->param );
+     x264_free( h );
+     return NULL;
+ }

@@ -65,7 +65,7 @@ def verify_buildconf(ffmpeg: str, work_dir: Path, timeout: int) -> None:
     (work_dir / "ffmpeg-version.txt").write_text(version, encoding="utf-8")
     buildconf = run([ffmpeg, "-buildconf"], timeout=timeout)
     (work_dir / "ffmpeg-buildconf.txt").write_text(buildconf, encoding="utf-8")
-    for flag in ("--enable-libx264", "--enable-libzimg", "--enable-gpl"):
+    for flag in ("--enable-libx264", "--enable-libzimg", "--enable-libdav1d", "--enable-gpl"):
         assert_contains(buildconf, flag, "ffmpeg buildconf")
 
 
@@ -231,6 +231,15 @@ def main() -> int:
         raise SystemExit(f"missing ffprobe: {ffprobe}")
 
     verify_buildconf(ffmpeg, work_dir, args.timeout)
+    av1_fixture = Path(__file__).parent / "fixtures" / "av1.ivf"
+    decoded = work_dir / "av1.yuv"
+    run(
+        [ffmpeg, "-y", "-hwaccel", "none", "-i", str(av1_fixture),
+         "-pix_fmt", "yuv420p", "-f", "rawvideo", str(decoded)],
+        timeout=args.timeout,
+    )
+    if decoded.stat().st_size != 2 * 64 * 64 * 3 // 2:
+        raise SystemExit("AV1 software decode did not produce both 64x64 frames")
     sample = work_dir / "sample.mp4"
     make_mp4(ffmpeg, sample, args.timeout)
     verify_probe(ffprobe, sample, work_dir, args.timeout)

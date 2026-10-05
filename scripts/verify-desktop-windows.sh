@@ -50,7 +50,7 @@ rg -q 'ffprobe\.exe' "$WORK_ROOT/windows-archive-list.txt" ||
 for exe in ffmpeg.exe ffprobe.exe; do
   report="$WORK_ROOT/windows-${exe%.exe}-objdump.txt"
   "$objdump" -p "$artifact_dir/$exe" > "$report"
-  if rg -qi 'DLL Name: (libstdc\+\+-6|libgcc_s|libwinpthread|libx264|libzimg|zlib)' "$report"; then
+  if rg -qi 'DLL Name: (libstdc\+\+-6|libc\+\+|libunwind|libgcc_s|libwinpthread|libx264|libzimg|libdav1d|dav1d|zlib)' "$report"; then
     die "$exe depends on an unpackaged runtime or pinned media library DLL"
   fi
 done

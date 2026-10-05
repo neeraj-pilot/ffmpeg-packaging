@@ -1,7 +1,7 @@
-# FFI Harness
+# Native runtime harness
 
 Production mobile runtime harness code lives here. It links directly against
-the packaged `ffmpeg_ffi` mobile artifact and exercises the public C ABI.
+the packaged `ffmpeg_runtime` mobile artifact and exercises the public C ABI.
 
 It should cover:
 
@@ -22,8 +22,8 @@ It should cover:
 Run it after building the matching mobile artifacts:
 
 ```sh
-tests/ffi_harness/run-mobile-harness.sh --android-device <adb-id>
-tests/ffi_harness/run-mobile-harness.sh --ios-simulator <simulator-udid>
+tests/runtime/run-mobile-harness.sh --android-device <adb-id>
+tests/runtime/run-mobile-harness.sh --ios-simulator <simulator-udid>
 ```
 
 The native C harness does not run on physical iOS devices. Physical-device

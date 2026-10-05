@@ -2,19 +2,23 @@
 
 Production patches live here as reviewable files.
 
-Current patch:
+FFmpeg patch:
 
 ```text
-patches/ffmpeg-8.1/ffmpeg-ffi-boundary.patch
+patches/ffmpeg-9.0/ffmpeg-runtime.patch
 ```
+
+`patches/x264/encoder-open-cleanup.patch` separately releases parameter strings
+when opening an encoder fails. Both mobile and desktop builds apply it. See
+`../docs/dependency-review.md` for its provenance and ownership analysis.
 
 Patch rules:
 
 - keep the patch limited to the mobile `fftools` command boundary
-- keep `FfmpegFfiSession` opaque in the public header
+- keep `FfmpegSession` opaque in the public header
 - keep command execution process-global and protected by an atomic lock
 - do not patch FFmpeg core libraries for wrapper behavior
-- keep metadata probing in `src/ffmpeg_ffi_probe.c`
+- keep metadata probing in `src/ffmpeg_runtime_probe.c`
 - do not patch desktop CLI artifacts
 - keep cancellation, progress, and run-state reset behavior covered by the
   mobile runtime harness

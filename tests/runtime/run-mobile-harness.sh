@@ -6,9 +6,9 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/common.sh"
 usage() {
   cat <<'USAGE'
 Usage:
-  tests/ffi_harness/run-mobile-harness.sh [--android-device <id>] [--ios-simulator <udid>]
+  tests/runtime/run-mobile-harness.sh [--android-device <id>] [--ios-simulator <udid>]
 
-Builds and runs the native FFmpeg FFI runtime harness against already-built
+Builds and runs the native FFmpeg runtime runtime harness against already-built
 mobile artifacts. Android currently requires android-arm64. iOS uses the
 ios-sim-arm64 build and a bootable simulator.
 USAGE
@@ -45,7 +45,7 @@ done
   exit 2
 }
 
-harness_src="$REPO_ROOT/tests/ffi_harness/ffmpeg_ffi_harness.c"
+harness_src="$REPO_ROOT/tests/runtime/ffmpeg_runtime_harness.c"
 require_file "$harness_src"
 ensure_common_dirs
 
@@ -68,38 +68,38 @@ build_android_harness() {
   require_executable "$clang"
 
   local lib_dir="$BUILD_ROOT/android-arm64/package/jni/arm64-v8a"
-  local out_dir="$WORK_ROOT/ffi-harness/android-arm64"
-  require_file "$lib_dir/libffmpeg_ffi.so"
+  local out_dir="$WORK_ROOT/runtime-harness/android-arm64"
+  require_file "$lib_dir/libffmpeg_runtime.so"
   reset_dir "$out_dir"
 
   "$clang" \
     -I"$REPO_ROOT/include" \
     "$harness_src" \
     -L"$lib_dir" \
-    -lffmpeg_ffi \
+    -lffmpeg_runtime \
     -Wl,-rpath,'$ORIGIN' \
-    -o "$out_dir/ffmpeg_ffi_harness"
+    -o "$out_dir/ffmpeg_runtime_harness"
 
   cp "$lib_dir"/*.so "$out_dir/"
 }
 
 run_android_harness() {
-  local out_dir="$WORK_ROOT/ffi-harness/android-arm64"
-  local remote_dir="/data/local/tmp/ffmpeg-ffi-harness"
+  local out_dir="$WORK_ROOT/runtime-harness/android-arm64"
+  local remote_dir="/data/local/tmp/ffmpeg-runtime-harness"
 
   build_android_harness
   adb -s "$android_device" shell "rm -rf '$remote_dir' && mkdir -p '$remote_dir'"
   adb -s "$android_device" push "$out_dir/." "$remote_dir/" >/dev/null
-  adb -s "$android_device" shell "chmod 755 '$remote_dir/ffmpeg_ffi_harness'"
-  adb -s "$android_device" shell "cd '$remote_dir' && LD_LIBRARY_PATH='$remote_dir' ./ffmpeg_ffi_harness"
+  adb -s "$android_device" shell "chmod 755 '$remote_dir/ffmpeg_runtime_harness'"
+  adb -s "$android_device" shell "cd '$remote_dir' && LD_LIBRARY_PATH='$remote_dir' ./ffmpeg_runtime_harness"
 }
 
 build_ios_harness() {
   ios_target_vars ios-sim-arm64
 
   local lib_dir="$BUILD_ROOT/ios-sim-arm64/package"
-  local out_dir="$WORK_ROOT/ffi-harness/ios-sim-arm64"
-  require_file "$lib_dir/ffmpeg_ffi.dylib"
+  local out_dir="$WORK_ROOT/runtime-harness/ios-sim-arm64"
+  require_file "$lib_dir/ffmpeg_runtime.dylib"
   reset_dir "$out_dir"
 
   "$IOS_CLANG" \
@@ -109,26 +109,26 @@ build_ios_harness() {
     -isysroot "$IOS_SDK_PATH" \
     -I"$REPO_ROOT/include" \
     "$harness_src" \
-    "$lib_dir/ffmpeg_ffi.dylib" \
+    "$lib_dir/ffmpeg_runtime.dylib" \
     -Wl,-rpath,@executable_path \
-    -o "$out_dir/ffmpeg_ffi_harness"
-  cp "$lib_dir/ffmpeg_ffi.dylib" "$out_dir/"
-  codesign -s - "$out_dir/ffmpeg_ffi_harness" >/dev/null 2>&1 || true
+    -o "$out_dir/ffmpeg_runtime_harness"
+  cp "$lib_dir/ffmpeg_runtime.dylib" "$out_dir/"
+  codesign -s - "$out_dir/ffmpeg_runtime_harness" >/dev/null 2>&1 || true
 }
 
 run_ios_harness() {
-  local out_dir="$WORK_ROOT/ffi-harness/ios-sim-arm64"
-  local spawn_dir="/tmp/ffmpeg-ffi-harness-ios-sim-${ios_simulator}"
+  local out_dir="$WORK_ROOT/runtime-harness/ios-sim-arm64"
+  local spawn_dir="/tmp/ffmpeg-runtime-harness-ios-sim-${ios_simulator}"
 
   build_ios_harness
   reset_dir "$spawn_dir"
-  cp "$out_dir/ffmpeg_ffi_harness" "$out_dir/ffmpeg_ffi.dylib" "$spawn_dir/"
-  chmod 755 "$spawn_dir/ffmpeg_ffi_harness"
+  cp "$out_dir/ffmpeg_runtime_harness" "$out_dir/ffmpeg_runtime.dylib" "$spawn_dir/"
+  chmod 755 "$spawn_dir/ffmpeg_runtime_harness"
   xcrun simctl bootstatus "$ios_simulator" -b >/dev/null
   set +e
   SIMCTL_CHILD_DYLD_LIBRARY_PATH="$spawn_dir" \
     xcrun simctl spawn -a "$IOS_ARCH" "$ios_simulator" \
-      "$spawn_dir/ffmpeg_ffi_harness"
+      "$spawn_dir/ffmpeg_runtime_harness"
   local spawn_status=$?
   set -e
   rm -rf "$spawn_dir"

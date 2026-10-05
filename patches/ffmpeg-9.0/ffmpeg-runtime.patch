@@ -1,0 +1,357 @@
+--- a/fftools/ffmpeg.c
++++ b/fftools/ffmpeg.c
+@@ -28,6 +28,7 @@
+ #include <errno.h>
+ #include <limits.h>
+ #include <stdatomic.h>
++#include <pthread.h>
+ #include <stdint.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -144,6 +145,177 @@
+ static volatile int ffmpeg_exited = 0;
+ static int64_t copy_ts_first_pts = AV_NOPTS_VALUE;
+ 
++typedef void (*ffmpeg_progress_callback)(void *opaque,
++                                              int64_t time_us,
++                                              int is_final);
++
++typedef struct FfmpegSession {
++    atomic_int cancel_requested;
++    ffmpeg_progress_callback progress_cb;
++    void *progress_opaque;
++    char output[8192];
++    size_t output_length;
++} FfmpegSession;
++
++FfmpegSession *ffmpeg_session_new(ffmpeg_progress_callback progress_cb,
++                                          void *progress_opaque);
++void ffmpeg_session_free(FfmpegSession *session);
++void ffmpeg_cancel(FfmpegSession *session);
++const char *ffmpeg_session_output(FfmpegSession *session);
++void ffmpeg_runtime_init_logging(void);
++int ffmpeg_execute(FfmpegSession *session, int argc, char **argv);
++void ffmpeg_runtime_reset_options_state(int embedded);
++
++static FfmpegSession *ffmpeg_runtime_active_session = NULL;
++static atomic_flag ffmpeg_runtime_execute_lock = ATOMIC_FLAG_INIT;
++static int64_t ffmpeg_runtime_report_last_time = -1;
++static int ffmpeg_runtime_report_first_report = 1;
++static volatile sig_atomic_t ffmpeg_runtime_embedded_mode = 0;
++static pthread_mutex_t ffmpeg_runtime_log_mutex = PTHREAD_MUTEX_INITIALIZER;
++static pthread_once_t ffmpeg_runtime_log_once = PTHREAD_ONCE_INIT;
++
++static void ffmpeg_runtime_log(void *context, int level, const char *format, va_list args)
++{
++    char line[1024];
++    int prefix = 1;
++    size_t length;
++
++    if (level > AV_LOG_WARNING || level > av_log_get_level())
++        return;
++    av_log_format_line2(context, level, format, args, line, sizeof(line), &prefix);
++    length = strlen(line);
++
++    pthread_mutex_lock(&ffmpeg_runtime_log_mutex);
++    FfmpegSession *session = ffmpeg_runtime_active_session;
++    if (session) {
++        const size_t capacity = sizeof(session->output) - 1;
++        if (session->output_length + length > capacity) {
++            const size_t drop = session->output_length + length - capacity;
++            memmove(session->output, session->output + drop,
++                    session->output_length - drop);
++            session->output_length -= drop;
++        }
++        memcpy(session->output + session->output_length, line, length);
++        session->output_length += length;
++        session->output[session->output_length] = 0;
++    }
++    pthread_mutex_unlock(&ffmpeg_runtime_log_mutex);
++}
++
++static void ffmpeg_runtime_install_logging(void)
++{
++    av_log_set_callback(ffmpeg_runtime_log);
++}
++
++void ffmpeg_runtime_init_logging(void)
++{
++    pthread_once(&ffmpeg_runtime_log_once, ffmpeg_runtime_install_logging);
++}
++
++const char *ffmpeg_session_output(FfmpegSession *session)
++{
++    return session->output;
++}
++
++FfmpegSession *ffmpeg_session_new(ffmpeg_progress_callback progress_cb,
++                                          void *progress_opaque)
++{
++    FfmpegSession *session = calloc(1, sizeof(*session));
++
++    if (!session)
++        return NULL;
++
++    atomic_init(&session->cancel_requested, 0);
++    session->progress_cb = progress_cb;
++    session->progress_opaque = progress_opaque;
++    return session;
++}
++
++void ffmpeg_session_free(FfmpegSession *session)
++{
++    free(session);
++}
++
++void ffmpeg_cancel(FfmpegSession *session)
++{
++    if (session)
++        atomic_store(&session->cancel_requested, 1);
++}
++
++static int ffmpeg_runtime_cancel_requested(void)
++{
++    return ffmpeg_runtime_active_session &&
++           atomic_load(&ffmpeg_runtime_active_session->cancel_requested);
++}
++
++static void ffmpeg_runtime_forward_progress(int64_t pts, int is_final)
++{
++    FfmpegSession *session = ffmpeg_runtime_active_session;
++
++    if (!session || !session->progress_cb)
++        return;
++    if (pts == AV_NOPTS_VALUE)
++        return;
++    if (atomic_load(&session->cancel_requested))
++        return;
++    session->progress_cb(session->progress_opaque, pts, is_final);
++}
++
++static void ffmpeg_runtime_reset_run_state(int embedded)
++{
++    atomic_store(&nb_output_dumped, 0);
++    received_sigterm = 0;
++    received_nb_signals = 0;
++    atomic_store(&transcode_init_done, 0);
++    ffmpeg_exited = 0;
++    copy_ts_first_pts = AV_NOPTS_VALUE;
++    current_time = (BenchmarkTimeStamps){ 0 };
++    ffmpeg_runtime_report_last_time = -1;
++    ffmpeg_runtime_report_first_report = 1;
++    ffmpeg_runtime_reset_options_state(embedded);
++
++    input_files = NULL;
++    nb_input_files = 0;
++    output_files = NULL;
++    nb_output_files = 0;
++    filtergraphs = NULL;
++    nb_filtergraphs = 0;
++    decoders = NULL;
++    nb_decoders = 0;
++    progress_avio = NULL;
++    vstats_file = NULL;
++    vstats_filename = NULL;
++    filter_hw_device = NULL;
++    filter_nbthreads = NULL;
++    print_graphs_file = NULL;
++    print_graphs_format = NULL;
++
++    dts_delta_threshold = 10;
++    dts_error_threshold = 3600 * 30;
++    frame_drop_threshold = 0;
++    do_benchmark = 0;
++    do_benchmark_all = 0;
++    do_hex_dump = 0;
++    do_pkt_dump = 0;
++    copy_ts = 0;
++    start_at_zero = 0;
++    copy_tb = -1;
++    debug_ts = 0;
++    exit_on_error = 0;
++    abort_on_flags = 0;
++    print_stats = -1;
++    max_error_rate = 2.0 / 3;
++    filter_complex_nbthreads = 0;
++    filter_buffered_frames = 0;
++    vstats_version = 2;
++    print_graphs = 0;
++    auto_conversion_filters = 1;
++    stats_period = 500000;
++    ignore_unknown_streams = 0;
++    copy_unknown_streams = 0;
++    recast_media = 0;
++}
++
+ static void
+ sigterm_handler(int sig)
+ {
+@@ -152,6 +324,8 @@
+     received_nb_signals++;
+     term_exit_sigsafe();
+     if(received_nb_signals > 3) {
++        if (ffmpeg_runtime_embedded_mode)
++            return;
+         ret = write(2/*STDERR_FILENO*/, "Received > 3 system signals, hard exiting\n",
+                     strlen("Received > 3 system signals, hard exiting\n"));
+         if (ret < 0) { /* Do nothing */ };
+@@ -204,6 +378,9 @@
+ 
+ void term_init(void)
+ {
++    if (ffmpeg_runtime_embedded_mode)
++        return;
++
+ #if defined __linux__
+     struct sigaction action = {0};
+     action.sa_handler = sigterm_handler;
+@@ -306,7 +483,8 @@
+ 
+ static int decode_interrupt_cb(void *ctx)
+ {
+-    return received_nb_signals > atomic_load(&transcode_init_done);
++    return ffmpeg_runtime_cancel_requested() ||
++           received_nb_signals > atomic_load(&transcode_init_done);
+ }
+ 
+ const AVIOInterruptCB int_cb = { decode_interrupt_cb, NULL };
+@@ -576,8 +754,6 @@
+     int vid;
+     double bitrate;
+     double speed;
+-    static int64_t last_time = -1;
+-    static int first_report = 1;
+     uint64_t nb_frames_dup = 0, nb_frames_drop = 0;
+     int mins, secs, ms, us;
+     int64_t hours;
+@@ -589,13 +765,13 @@
+         return;
+ 
+     if (!is_last_report) {
+-        if (last_time == -1) {
+-            last_time = cur_time;
+-        }
+-        if (((cur_time - last_time) < stats_period && !first_report) ||
+-            (first_report && atomic_load(&nb_output_dumped) < nb_output_files))
++        if (ffmpeg_runtime_report_last_time == -1) {
++            ffmpeg_runtime_report_last_time = cur_time;
++        }
++        if (((cur_time - ffmpeg_runtime_report_last_time) < stats_period && !ffmpeg_runtime_report_first_report) ||
++            (ffmpeg_runtime_report_first_report && atomic_load(&nb_output_dumped) < nb_output_files))
+             return;
+-        last_time = cur_time;
++        ffmpeg_runtime_report_last_time = cur_time;
+     }
+ 
+     t = (cur_time-timer_start) / 1000000.0;
+@@ -650,6 +826,7 @@
+ 
+     bitrate = pts != AV_NOPTS_VALUE && pts && total_size >= 0 ? total_size * 8 / (pts / 1000.0) : -1;
+     speed   = pts != AV_NOPTS_VALUE && t != 0.0 ? (double)pts / AV_TIME_BASE / t : -1;
++    ffmpeg_runtime_forward_progress(pts, is_last_report);
+ 
+     if (total_size < 0) av_bprintf(&buf, "size=N/A time=");
+     else                av_bprintf(&buf, "size=%8.0fKiB time=", total_size / 1024.0);
+@@ -728,7 +905,7 @@
+         }
+     }
+ 
+-    first_report = 0;
++    ffmpeg_runtime_report_first_report = 0;
+ }
+ 
+ static void print_stream_maps(void)
+@@ -906,7 +1083,7 @@
+     while (!sch_wait(sch, stats_period, &transcode_ts)) {
+         int64_t cur_time= av_gettime_relative();
+ 
+-        if (received_nb_signals)
++        if (received_nb_signals || ffmpeg_runtime_cancel_requested())
+             break;
+ 
+         /* if 'q' pressed, exits */
+@@ -978,17 +1155,33 @@
+ #endif
+ }
+ 
+-int main(int argc, char **argv)
++int ffmpeg_execute(FfmpegSession *session, int argc, char **argv)
+ {
+     Scheduler *sch = NULL;
+-
+     int ret;
+     BenchmarkTimeStamps ti;
+ 
++    if (atomic_flag_test_and_set(&ffmpeg_runtime_execute_lock))
++        return AVERROR(EBUSY);
++
++    if (session && atomic_load(&session->cancel_requested)) {
++        atomic_flag_clear(&ffmpeg_runtime_execute_lock);
++        return 255;
++    }
++    if (session)
++        ffmpeg_runtime_init_logging();
++    ffmpeg_runtime_embedded_mode = session != NULL;
++    ffmpeg_runtime_reset_run_state(ffmpeg_runtime_embedded_mode);
++    pthread_mutex_lock(&ffmpeg_runtime_log_mutex);
++    ffmpeg_runtime_active_session = session;
++    pthread_mutex_unlock(&ffmpeg_runtime_log_mutex);
++
+     init_dynload();
+ 
+-    setvbuf(stderr,NULL,_IONBF,0); /* win32 runtime needs this */
+-
++    if (!ffmpeg_runtime_embedded_mode)
++        setvbuf(stderr,NULL,_IONBF,0); /* win32 runtime needs this */
++
++    av_log_set_level(AV_LOG_INFO);
+     av_log_set_flags(AV_LOG_SKIP_REPEATED);
+     parse_loglevel(argc, argv, options);
+ 
+@@ -1044,15 +1237,27 @@
+           (ret == FFMPEG_ERROR_RATE_EXCEEDED) ?  69 : ret;
+ 
+ finish:
+-    if (ret == AVERROR_EXIT)
++    if (ffmpeg_runtime_cancel_requested())
++        ret = 255;
++    else if (ret == AVERROR_EXIT)
+         ret = 0;
+ 
+     ffmpeg_cleanup(ret);
+ 
+     sch_free(&sch);
++    pthread_mutex_lock(&ffmpeg_runtime_log_mutex);
++    ffmpeg_runtime_active_session = NULL;
++    pthread_mutex_unlock(&ffmpeg_runtime_log_mutex);
++    ffmpeg_runtime_embedded_mode = 0;
++    atomic_flag_clear(&ffmpeg_runtime_execute_lock);
+ 
+     av_log(NULL, AV_LOG_VERBOSE, "\n");
+     av_log(NULL, AV_LOG_VERBOSE, "Exiting with exit code %d\n", ret);
+ 
+     return ret;
+ }
++
++int main(int argc, char **argv)
++{
++    return ffmpeg_execute(NULL, argc, argv);
++}
+--- a/fftools/ffmpeg_opt.c
++++ b/fftools/ffmpeg_opt.c
+@@ -86,6 +86,15 @@
+ int ignore_unknown_streams = 0;
+ int copy_unknown_streams = 0;
+ int recast_media = 0;
++
++void ffmpeg_runtime_reset_options_state(int embedded);
++
++void ffmpeg_runtime_reset_options_state(int embedded)
++{
++    file_overwrite = 0;
++    no_file_overwrite = 0;
++    stdin_interaction = embedded ? 0 : 1;
++}
+ 
+ // this struct is passed as the optctx argument
+ // to func_arg() for global options
