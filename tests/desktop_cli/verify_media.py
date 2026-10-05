@@ -65,7 +65,7 @@ def verify_buildconf(ffmpeg: str, work_dir: Path, timeout: int) -> None:
     (work_dir / "ffmpeg-version.txt").write_text(version, encoding="utf-8")
     buildconf = run([ffmpeg, "-buildconf"], timeout=timeout)
     (work_dir / "ffmpeg-buildconf.txt").write_text(buildconf, encoding="utf-8")
-    for flag in ("--enable-libx264", "--enable-libzimg", "--enable-gpl"):
+    for flag in ("--enable-libx264", "--enable-libzimg", "--enable-libdav1d", "--enable-gpl"):
         assert_contains(buildconf, flag, "ffmpeg buildconf")
 
 
@@ -188,6 +188,36 @@ def verify_hls(ffmpeg: str, sample: Path, hls_dir: Path, timeout: int) -> None:
         raise SystemExit("HLS single-file segment is missing or empty")
 
 
+def verify_metadata(ffmpeg: str, sample: Path, work_dir: Path, timeout: int) -> None:
+    for apple_tags in (False, True):
+        tagged = work_dir / ("apple.mov" if apple_tags else "standard.mp4")
+        expected = {
+            "creation_time": "2024-01-02T03:04:05.000000Z",
+            "location": "+12.3400+056.7800/",
+        }
+        command = [ffmpeg, "-y", "-i", str(sample), "-c", "copy",
+                   "-metadata", "creation_time=2024-01-02T03:04:05Z",
+                   "-metadata", "location=+12.3400+056.7800/"]
+        if apple_tags:
+            expected = {
+                "com.apple.quicktime.creationdate": "2024-02-03T04:05:06+05:30",
+                "com.apple.quicktime.location.ISO6709": "+23.4500+067.8900/",
+            }
+            command.extend(["-movflags", "use_metadata_tags"])
+            for key, value in expected.items():
+                command.extend(["-metadata", f"{key}={value}"])
+        run(command + [str(tagged)], timeout=timeout)
+        metadata = tagged.with_suffix(".txt")
+        # The desktop upload path uses FFmetadata, not FFprobe JSON.
+        run([ffmpeg, "-i", str(tagged), "-c", "copy", "-map_metadata", "0",
+             "-f", "ffmetadata", str(metadata)], timeout=timeout)
+        pairs = [line.split("=") for line in metadata.read_text(encoding="utf-8").splitlines()]
+        actual = dict(pair for pair in pairs if len(pair) == 2)
+        for key, value in expected.items():
+            if actual.get(key) != value:
+                raise SystemExit(f"FFmetadata {key}: expected {value!r}, got {actual.get(key)!r}")
+
+
 def verify_tonemap(ffmpeg: str, work_dir: Path, timeout: int) -> None:
     run(
         [
@@ -231,9 +261,19 @@ def main() -> int:
         raise SystemExit(f"missing ffprobe: {ffprobe}")
 
     verify_buildconf(ffmpeg, work_dir, args.timeout)
+    av1_fixture = Path(__file__).parent / "fixtures" / "av1.ivf"
+    decoded = work_dir / "av1.yuv"
+    run(
+        [ffmpeg, "-y", "-hwaccel", "none", "-i", str(av1_fixture),
+         "-pix_fmt", "yuv420p", "-f", "rawvideo", str(decoded)],
+        timeout=args.timeout,
+    )
+    if decoded.stat().st_size != 2 * 64 * 64 * 3 // 2:
+        raise SystemExit("AV1 software decode did not produce both 64x64 frames")
     sample = work_dir / "sample.mp4"
     make_mp4(ffmpeg, sample, args.timeout)
     verify_probe(ffprobe, sample, work_dir, args.timeout)
+    verify_metadata(ffmpeg, sample, work_dir, args.timeout)
     verify_hls(ffmpeg, sample, work_dir / "hls", args.timeout)
     verify_tonemap(ffmpeg, work_dir, args.timeout)
     print(f"desktop media verification complete for {args.target}")

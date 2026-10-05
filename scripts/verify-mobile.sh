@@ -39,8 +39,8 @@ if [ "${#targets[@]}" -eq 0 ]; then
   targets=($MOBILE_TARGETS)
 fi
 
-android_aar="$DIST_ROOT/mobile/android/ffmpeg.aar"
-ios_xcframework="$DIST_ROOT/mobile/ios/ffmpeg.xcframework"
+android_aar="$DIST_ROOT/mobile/android/ffmpeg-runtime.aar"
+ios_xcframework="$DIST_ROOT/mobile/ios/FFmpegRuntime.xcframework"
 needs_android=0
 needs_ios=0
 has_android_arm64=0

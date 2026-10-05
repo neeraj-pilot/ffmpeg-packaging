@@ -35,7 +35,7 @@ jobs:
 
       - name: Shell syntax
         run: |
-          bash -n scripts/*.sh tests/ffi_harness/run-mobile-harness.sh
+          bash -n scripts/*.sh tests/runtime/run-mobile-harness.sh
           python3 - <<'PY'
           from pathlib import Path
 
@@ -63,39 +63,40 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ! rg -n "struct FfmpegFfiSession[[:space:]]*\\{" include/ffmpeg_ffi.h
+          ! rg -n "struct FfmpegSession[[:space:]]*\\{" include/ffmpeg_runtime.h
           ci_work="$FFMPEG_PACKAGING_TEST_ROOT/work/ci"
           mkdir -p "$ci_work"
           cat > "$ci_work/header-smoke.c" <<'EOF'
-          #include "include/ffmpeg_ffi.h"
+          #include "include/ffmpeg_runtime.h"
 
           int main(void) {
-              FfmpegFfiSession *session = ffmpeg_session_new(0, 0);
+              FfmpegSession *session = ffmpeg_session_new(0, 0);
               ffmpeg_cancel(session);
               ffmpeg_session_free(session);
               return 0;
           }
           EOF
           clang -fsyntax-only -I. "$ci_work/header-smoke.c"
-          clang -fsyntax-only -Iinclude tests/ffi_harness/ffmpeg_ffi_harness.c
+          clang -fsyntax-only -Iinclude tests/runtime/ffmpeg_runtime_harness.c
 
       - name: Check FFmpeg patch and wrapper source
         shell: bash
         run: |
           set -euo pipefail
-          source versions.env
+          source scripts/common.sh
           ci_work="$FFMPEG_PACKAGING_TEST_ROOT/work/ci"
           mkdir -p "$ci_work"
           curl -fL "$FFMPEG_URL" -o "$ci_work/ffmpeg-$FFMPEG_VERSION.tar.xz"
           printf '%s  %s\n' "$FFMPEG_SHA256" "$ci_work/ffmpeg-$FFMPEG_VERSION.tar.xz" | sha256sum -c -
           tar -xf "$ci_work/ffmpeg-$FFMPEG_VERSION.tar.xz" -C "$ci_work"
           ffmpeg_tree="$ci_work/ffmpeg-$FFMPEG_VERSION"
+          patch_file="$(boundary_patch)"
           scripts/validate-fftools-state-audit.sh "$ffmpeg_tree"
-          (cd "$ffmpeg_tree" && patch -p1 --dry-run < "$GITHUB_WORKSPACE/patches/ffmpeg-8.1/ffmpeg-ffi-boundary.patch")
+          (cd "$ffmpeg_tree" && patch -p1 --dry-run < "$patch_file")
           (
             cd "$ffmpeg_tree"
-            patch -p1 < "$GITHUB_WORKSPACE/patches/ffmpeg-8.1/ffmpeg-ffi-boundary.patch"
+            patch -p1 < "$patch_file"
             ./configure --disable-x86asm --disable-doc --disable-ffplay --disable-ffprobe >/dev/null
             make -j2 ffmpeg >/dev/null
           )
-          clang -fsyntax-only -I"$ffmpeg_tree" src/ffmpeg_ffi_probe.c
+          clang -fsyntax-only -I"$ffmpeg_tree" src/ffmpeg_runtime_probe.c
