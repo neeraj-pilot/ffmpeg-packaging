@@ -30,8 +30,12 @@ target_is_desktop "$target" || die "unknown desktop target: $target"
 
 require_cmd make
 require_cmd pkg-config
+require_cmd meson
 ensure_common_dirs
 "$REPO_ROOT/scripts/fetch-sources.sh"
+
+fetch_dav1d_source
+dav1d_source="$SOURCES_ROOT/dav1d-$DAV1D_VERSION"
 
 desktop_host_arg() {
   case "$DESKTOP_OS:$DESKTOP_ARCH" in
@@ -55,9 +59,11 @@ build_one_desktop() {
   local zimg_src="$target_root/zimg"
   local x264_prefix="$deps_root/x264"
   local zimg_prefix="$deps_root/zimg"
+  local dav1d_prefix="$deps_root/dav1d"
   reset_dir "$target_root"
   mkdir -p "$deps_root" "$pkgconfig_dir"
   copy_clean_tree "$(x264_source_dir)" "$x264_src"
+  (cd "$x264_src" && patch -p1 < "$REPO_ROOT/patches/x264/encoder-open-cleanup.patch")
   copy_clean_tree "$(zimg_source_dir)" "$zimg_src"
   copy_clean_tree "$(ffmpeg_source_dir)" "$ffmpeg_build"
 
@@ -73,6 +79,7 @@ build_one_desktop() {
   local extra_ldflags=""
   local ffmpeg_cross_flags=()
   if [ "$DESKTOP_OS" = "darwin" ]; then
+    export MACOSX_DEPLOYMENT_TARGET="$DESKTOP_MACOS_MIN_VERSION"
     extra_cflags="-arch $DESKTOP_ARCH"
     extra_ldflags="-arch $DESKTOP_ARCH"
     ffmpeg_cross_flags+=(--enable-cross-compile)
@@ -98,7 +105,17 @@ build_one_desktop() {
     require_cmd "$ranlib"
     require_cmd "$strip"
     exe_suffix=".exe"
-    extra_ldflags="-static -static-libgcc -static-libstdc++"
+    # Ente does not capture screens; this filter also conflicts with libc++'s
+    # <version> header on case-insensitive Windows filesystems.
+    ffmpeg_cross_flags+=(--disable-filter=gfxcapture)
+    if [ "$DESKTOP_ARCH" = "aarch64" ]; then
+      # Windows ARM64 is built with MSYS2's LLVM/libc++ toolchain.
+      extra_ldflags="-static"
+      ffmpeg_cross_flags+=(--host-cc="$cc" --nm=llvm-nm --windres=llvm-windres)
+      ffmpeg_cross_flags+=(--disable-bzlib --disable-lzma --disable-iconv)
+    else
+      extra_ldflags="-static -static-libgcc -static-libstdc++"
+    fi
     ffmpeg_cross_flags+=(--enable-cross-compile --cross-prefix="$cross_prefix-")
   fi
   host="$(desktop_host_arg)"
@@ -142,11 +159,36 @@ build_one_desktop() {
     make -j"$JOBS" install
   )
 
+  log "build desktop dav1d for $one_target"
+  local meson_system="$DESKTOP_OS"
+  local meson_cpu="$DESKTOP_ARCH"
+  [ "$meson_system" != "mingw32" ] || meson_system=windows
+  [ "$meson_cpu" != "arm64" ] || meson_cpu=aarch64
+  local cross_file="$target_root/dav1d-cross.ini"
+  cat > "$cross_file" <<EOF
+[binaries]
+c = '$cc'
+ar = '$ar'
+strip = '$strip'
+[host_machine]
+system = '$meson_system'
+cpu_family = '$meson_cpu'
+cpu = '$meson_cpu'
+endian = 'little'
+EOF
+  CFLAGS="$extra_cflags" LDFLAGS="$extra_ldflags" meson setup \
+    "$target_root/dav1d-build" "$dav1d_source" \
+    --cross-file "$cross_file" --prefix "$dav1d_prefix" --libdir lib \
+    --default-library static --buildtype release --wrap-mode nodownload \
+    -Denable_tools=false -Denable_tests=false -Denable_examples=false
+  meson compile -C "$target_root/dav1d-build" -j "$JOBS"
+  meson install -C "$target_root/dav1d-build"
+
   cp "$x264_prefix/lib/pkgconfig/x264.pc" "$pkgconfig_dir/x264.pc"
   cp "$zimg_prefix/lib/pkgconfig/zimg.pc" "$pkgconfig_dir/zimg.pc"
-  case "$DESKTOP_OS" in
-    darwin) normalize_zimg_pkg_config "$pkgconfig_dir/zimg.pc" "-lc++ -lm" ;;
-    mingw32) normalize_zimg_pkg_config "$pkgconfig_dir/zimg.pc" "-lstdc++ -lm" ;;
+  cp "$dav1d_prefix/lib/pkgconfig/dav1d.pc" "$pkgconfig_dir/dav1d.pc"
+  case "$DESKTOP_OS:$DESKTOP_ARCH" in
+    darwin:*|mingw32:aarch64) normalize_zimg_pkg_config "$pkgconfig_dir/zimg.pc" "-lc++ -lm" ;;
     *) normalize_zimg_pkg_config "$pkgconfig_dir/zimg.pc" "-lstdc++ -lm" ;;
   esac
 
@@ -170,20 +212,20 @@ build_one_desktop() {
       --enable-gpl \
       --enable-libx264 \
       --enable-libzimg \
+      --enable-libdav1d \
       --enable-zlib \
       --enable-ffmpeg \
       --enable-ffprobe \
       --disable-ffplay \
       --disable-doc \
       --extra-cflags="$extra_cflags" \
-      --extra-ldflags="$extra_ldflags"
+      --extra-ldflags="$extra_ldflags" || { cat ffbuild/config.log >&2; exit 1; }
     make -j"$JOBS"
     make install
   )
   mkdir -p "$target_root/bin"
   cp "$prefix/bin/ffmpeg$exe_suffix" "$target_root/bin/ffmpeg$exe_suffix"
   cp "$prefix/bin/ffprobe$exe_suffix" "$target_root/bin/ffprobe$exe_suffix"
-  write_manifest "$target_root/bin/build-manifest.env" "TARGET=$one_target"
 }
 
 case "$target" in
@@ -205,25 +247,26 @@ case "$target" in
     ;;
   *)
     build_one_desktop "$target"
-    desktop_target_vars "$target"
     out="$DIST_ROOT/desktop/${target#desktop-}"
     reset_dir "$out"
     cp "$BUILD_ROOT/$target/bin/"* "$out/"
     ;;
 esac
 
+cp "$dav1d_source/COPYING" "$out/dav1d-COPYING"
 case "$target" in
   desktop-windows-*)
     require_cmd zip
     archive="$out/ffmpeg.zip"
     rm -f "$archive"
-    (cd "$out" && zip -Xqr "$archive" ffmpeg.exe ffprobe.exe)
+    (cd "$out" && zip -Xqr "$archive" ffmpeg.exe ffprobe.exe dav1d-COPYING)
     ;;
   *)
     archive="$out/ffmpeg.tar.gz"
-    tar -C "$out" -czf "$archive" ffmpeg ffprobe
+    tar -C "$out" -czf "$archive" ffmpeg ffprobe dav1d-COPYING
     ;;
 esac
 sha256_file "$archive" > "$archive.sha256"
-write_manifest "$archive.manifest.env" "TARGET=$target" "ARTIFACT=$archive"
+write_manifest "$archive.manifest.env" "TARGET=$target" "ARTIFACT=$archive" \
+  "DAV1D_VERSION=$DAV1D_VERSION" "DAV1D_SHA256=$DAV1D_SHA256"
 log "built desktop artifact $archive"

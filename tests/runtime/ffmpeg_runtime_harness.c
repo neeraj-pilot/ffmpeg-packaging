@@ -1,4 +1,4 @@
-#include "ffmpeg_ffi.h"
+#include "ffmpeg_runtime.h"
 
 #include <errno.h>
 #include <ctype.h>
@@ -11,6 +11,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
 
 #define ARGC(args) ((int)(sizeof(args) / sizeof((args)[0]) - 1))
 
@@ -22,7 +24,7 @@ typedef struct HarnessStats {
 } HarnessStats;
 
 typedef struct ExecuteTask {
-    FfmpegFfiSession *session;
+    FfmpegSession *session;
     int argc;
     char **argv;
     int ret;
@@ -272,7 +274,7 @@ static void *watchdog_thread(void *opaque)
 static int run_command(const char *name, int argc, char **argv, int expected)
 {
     HarnessStats stats;
-    FfmpegFfiSession *session;
+    FfmpegSession *session;
     int ret;
 
     stats_init(&stats);
@@ -301,7 +303,7 @@ static int run_command(const char *name, int argc, char **argv, int expected)
 
 static int execute_command_no_check(int argc, char **argv)
 {
-    FfmpegFfiSession *session = ffmpeg_session_new(NULL, NULL);
+    FfmpegSession *session = ffmpeg_session_new(NULL, NULL);
     int ret;
 
     if (!session)
@@ -481,7 +483,7 @@ static int run_cancelled(const char *name, int argc, char **argv,
                          useconds_t cancel_after_us)
 {
     HarnessStats stats;
-    FfmpegFfiSession *session;
+    FfmpegSession *session;
     ExecuteTask task;
     pthread_t thread;
     pthread_t watchdog;
@@ -540,8 +542,8 @@ static void run_overlap(int argc, char **long_argv, int short_argc,
                         char **short_argv)
 {
     HarnessStats stats;
-    FfmpegFfiSession *long_session;
-    FfmpegFfiSession *short_session;
+    FfmpegSession *long_session;
+    FfmpegSession *short_session;
     ExecuteTask task;
     pthread_t thread;
     int ret;
@@ -604,6 +606,153 @@ static void run_probe(const char *path)
     ffmpeg_free_string(json);
 }
 
+static void run_pre_cancelled(int argc, char **argv)
+{
+    FfmpegSession *session = ffmpeg_session_new(NULL, NULL);
+    ffmpeg_cancel(session);
+    const int ret = ffmpeg_execute(session, argc, argv);
+    if (ret == 255 && access("overlap.mp4", F_OK) != 0)
+        ok("cancel-before-execute");
+    else
+        fail("cancel-before-execute", "started a cancelled command");
+    ffmpeg_session_free(session);
+}
+
+static void run_stalled_io(int output)
+{
+    const char *name = output ? "stalled-output-cancel" : "stalled-input-cancel";
+    struct sockaddr_in address = { .sin_family = AF_INET,
+                                   .sin_addr.s_addr = htonl(INADDR_LOOPBACK) };
+    socklen_t address_size = sizeof(address);
+    int listener = socket(AF_INET, SOCK_STREAM, 0);
+    if (listener < 0 || bind(listener, (struct sockaddr *)&address, address_size) ||
+        listen(listener, 1) ||
+        getsockname(listener, (struct sockaddr *)&address, &address_size)) {
+        fail(name, "could not create loopback peer");
+        if (listener >= 0) close(listener);
+        return;
+    }
+
+    // The listening peer never consumes or supplies media. Its small receive
+    // buffer makes raw-video output block in a write; input blocks while probing.
+    int receive_buffer = 1024;
+    setsockopt(listener, SOL_SOCKET, SO_RCVBUF, &receive_buffer, sizeof(receive_buffer));
+    char url[128];
+    snprintf(url, sizeof(url), "tcp://127.0.0.1:%d", ntohs(address.sin_port));
+    char *input_argv[] = {
+        "ffmpeg", "-nostdin", "-f", "mpegts", "-i", url,
+        "-f", "null", "-", NULL,
+    };
+    char *output_argv[] = {
+        "ffmpeg", "-nostdin", "-f", "lavfi", "-i",
+        "testsrc2=size=1280x720:rate=30", "-c:v", "rawvideo",
+        "-f", "rawvideo", url, NULL,
+    };
+    if (output)
+        run_cancelled(name, ARGC(output_argv), output_argv, 1000000);
+    else
+        run_cancelled(name, ARGC(input_argv), input_argv, 1000000);
+    close(listener);
+}
+
+static void run_diagnostics(void)
+{
+    char *quiet[] = {
+        "ffmpeg", "-loglevel", "quiet", "-i", "normal.mp4",
+        "-frames:v", "1", "-f", "null", "-", NULL,
+    };
+    run_command("quiet-command", ARGC(quiet), quiet, 0);
+    char *argv[] = { "ffmpeg", "-ente_nonexistent_option", NULL };
+    FfmpegSession *session = ffmpeg_session_new(NULL, NULL);
+    const int ret = ffmpeg_execute(session, ARGC(argv), argv);
+    const char *output = ffmpeg_session_output(session);
+    if (ret != 0 && strstr(output, "ente_nonexistent_option") && strlen(output) < 8192)
+        ok("diagnostics");
+    else
+        fail("diagnostics", "missing bounded command diagnostics");
+    ffmpeg_session_free(session);
+}
+
+static void run_metadata_probe(void)
+{
+    const char *chapters = ";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=1000\ntitle=Opening\n";
+    if (write_file("chapters.txt", chapters, strlen(chapters))) {
+        fail("metadata-fixture", "could not write chapters");
+        return;
+    }
+    char *argv[] = {
+        "ffmpeg", "-y", "-display_rotation", "90", "-i", "normal.mp4",
+        "-f", "ffmetadata", "-i", "chapters.txt", "-map_chapters", "1",
+        "-c", "copy", "-metadata", "comment=caf\xe9",
+        "-timecode", "12:34:56:00", "rotated.mp4", NULL,
+    };
+    const char *fields[] = {
+        "\"color_transfer\":\"smpte2084\"",
+        "\"sample_aspect_ratio\":\"4:3\"",
+        "\"side_data_type\":\"Display Matrix\"",
+        "\"rotation\":",
+        "\"pix_fmt\":\"yuv420p\"",
+        "\"disposition\":",
+        "\"comment\":\"caf\\ufffd\"",
+        "\"codec_long_name\":\"H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10\"",
+        "\"codec_tag_string\":\"avc1\"",
+        "\"codec_tag_string\":\"tmcd\"",
+        "\"display_aspect_ratio\":\"64:27\"",
+        "\"field_order\":\"progressive\"",
+        "\"bits_per_raw_sample\":\"8\"",
+        "\"coded_width\":160",
+        "\"coded_height\":90",
+        "\"is_avc\":\"true\"",
+        "\"duration_ts\":",
+        "\"title\":\"Opening\"",
+        "\"chapters\":[{",
+        "\"end_time\":\"1.000000\"",
+    };
+    char *json = NULL;
+    run_command("metadata-fixture", ARGC(argv), argv, 0);
+    const int ret = ffmpeg_probe_media_json("rotated.mp4", &json);
+    if (ret || !json) {
+        fail("metadata-probe", "probe failed");
+    } else {
+        if (strstr(json, "\"codec_name\":\"none\""))
+            fail("metadata-probe", "unknown timecode codec should be omitted");
+        for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
+            if (!strstr(json, fields[i])) {
+                fail("metadata-probe", fields[i]);
+                fprintf(stderr, "%s\n", json);
+            }
+        }
+        if (json_is_valid(json))
+            ok("metadata-probe-json");
+        else
+            fail("metadata-probe-json", "invalid JSON");
+    }
+    ffmpeg_free_string(json);
+    remove("rotated.mp4");
+    remove("chapters.txt");
+}
+
+static void run_audio_metadata_probe(void)
+{
+    char *argv[] = {
+        "ffmpeg", "-y", "-f", "lavfi", "-i", "sine=duration=1:sample_rate=48000",
+        "-c:a", "pcm_s24le", "audio.wav", NULL,
+    };
+    char *json = NULL;
+    run_command("audio-metadata-fixture", ARGC(argv), argv, 0);
+    const int ret = ffmpeg_probe_media_json("audio.wav", &json);
+    if (!ret && json && json_is_valid(json) &&
+        strstr(json, "\"sample_fmt\":\"s32\"") &&
+        strstr(json, "\"bits_per_sample\":24") &&
+        strstr(json, "\"bits_per_raw_sample\":\"24\"") &&
+        strstr(json, "\"sample_rate\":\"48000\""))
+        ok("audio-metadata-probe");
+    else
+        fail("audio-metadata-probe", "missing PCM format or bit depth");
+    ffmpeg_free_string(json);
+    remove("audio.wav");
+}
+
 int main(void)
 {
     char *normal[] = {
@@ -612,6 +761,10 @@ int main(void)
         "-y",
         "-f", "lavfi",
         "-i", "testsrc2=duration=1:size=160x90:rate=5",
+        "-vf", "setsar=4/3,setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc",
+        "-color_trc", "smpte2084",
+        "-color_primaries", "bt2020",
+        "-colorspace", "bt2020nc",
         "-an",
         "-c:v", "libx264",
         "-preset", "ultrafast",
@@ -693,11 +846,17 @@ int main(void)
     remove("hls-cancel.ts");
 
     run_command("success", ARGC(normal), normal, 0);
+    run_pre_cancelled(ARGC(short_encode), short_encode);
+    run_diagnostics();
+    run_metadata_probe();
+    run_audio_metadata_probe();
     run_command("reentry", ARGC(reentry), reentry, 0);
     run_signal_handler_preserved();
     run_overwrite_state_reset();
     run_cancelled("cancel", ARGC(long_encode), long_encode, 500000);
     run_cancelled("immediate-cancel", ARGC(long_encode), long_encode, 1000);
+    run_stalled_io(0);
+    run_stalled_io(1);
     if (write_file("hls-key.bin", hls_key, sizeof(hls_key)) != 0 ||
         write_file("hls-keyinfo.txt", hls_keyinfo, strlen(hls_keyinfo)) != 0) {
         fail("hls-aes-cancel", "failed to create HLS key fixtures");
@@ -711,11 +870,11 @@ int main(void)
     run_probe("reentry.mp4");
 
     if (failures) {
-        fprintf(stderr, "ffmpeg_ffi_harness failed: %d failure(s)\n", failures);
+        fprintf(stderr, "ffmpeg_runtime_harness failed: %d failure(s)\n", failures);
         return 1;
     }
 
-    fprintf(stderr, "ffmpeg_ffi_harness passed\n");
+    fprintf(stderr, "ffmpeg_runtime_harness passed\n");
     remove("hls-key.bin");
     remove("hls-keyinfo.txt");
     remove("hls-cancel.m3u8");

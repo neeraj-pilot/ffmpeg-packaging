@@ -1,0 +1,52 @@
+name: Wasm
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/wasm.yml"
+      - "versions.env"
+      - "scripts/build-wasm.sh"
+      - "scripts/common.sh"
+      - "scripts/fetch-sources.sh"
+      - "patches/**"
+      - "src/wasm/**"
+      - "tests/wasm/**"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      FFMPEG_PACKAGING_TEST_ROOT: ${{ github.workspace }}-test
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf automake curl git libtool make meson ninja-build pkg-config python3 xz-utils
+      - name: Install pinned Emscripten and build
+        shell: bash
+        run: |
+          set -euo pipefail
+          source versions.env
+          sdk="$RUNNER_TEMP/emsdk"
+          git init "$sdk"
+          git -C "$sdk" remote add origin https://github.com/emscripten-core/emsdk.git
+          git -C "$sdk" fetch --depth 1 origin "$EMSDK_REVISION"
+          git -C "$sdk" checkout --detach FETCH_HEAD
+          "$sdk/emsdk" install "$EMSCRIPTEN_VERSION"
+          "$sdk/emsdk" activate "$EMSCRIPTEN_VERSION"
+          source "$sdk/emsdk_env.sh"
+          bash scripts/build-wasm.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ffmpeg-wasm
+          path: |
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/ffmpeg-wasm.tar.gz
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/ffmpeg-wasm.tar.gz.sha256
+          if-no-files-found: error

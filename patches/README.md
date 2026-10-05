@@ -1,25 +1,15 @@
 # Patches
 
-Production patches live here as reviewable files.
+- `ffmpeg-9.0/ffmpeg-runtime.patch` adds the reusable mobile command boundary.
+  Wasm shares it and applies `ffmpeg-9.0/wasm.patch` afterward for ffprobe,
+  timeout, and progress support. Desktop CLI builds apply neither patch.
+- `x264/encoder-open-cleanup.patch` releases parameter strings when opening an
+  encoder fails. All builds apply it; provenance is in
+  [the dependency review](../docs/dependency-review.md).
 
-Current patch:
+Keep runtime patches confined to `fftools`; metadata probing uses direct libav
+APIs in `src/ffmpeg_runtime_probe.c`. Preserve the opaque session ABI, serialized
+execution, cancellation, and host-process safety. Shared runtime changes need
+mobile harness and browser verification.
 
-```text
-patches/ffmpeg-8.1/ffmpeg-ffi-boundary.patch
-```
-
-Patch rules:
-
-- keep the patch limited to the mobile `fftools` command boundary
-- keep `FfmpegFfiSession` opaque in the public header
-- keep command execution process-global and protected by an atomic lock
-- do not patch FFmpeg core libraries for wrapper behavior
-- keep metadata probing in `src/ffmpeg_ffi_probe.c`
-- do not patch desktop CLI artifacts
-- keep cancellation, progress, and run-state reset behavior covered by the
-  mobile runtime harness
-- split into a second patch only if a future change touches FFmpeg core
-  libraries or non-wrapper behavior
-
-See `../docs/mobile-fftools-patch.md` for the mobile patch rationale and
-command-state audit.
+See [runtime contracts](../docs/mobile-fftools-patch.md).

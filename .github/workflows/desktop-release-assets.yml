@@ -6,7 +6,6 @@ on:
       tag:
         description: Release tag to download and verify
         required: true
-        default: ffmpeg-8.1.2-pilot.2
 
 permissions:
   contents: read
@@ -15,9 +14,15 @@ env:
   FFMPEG_PACKAGING_TEST_ROOT: ${{ github.workspace }}-test
 
 jobs:
-  linux-x64:
-    name: Linux x64 release asset
-    runs-on: ubuntu-22.04
+  linux:
+    name: Linux ${{ matrix.arch }} release asset
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, runner: ubuntu-22.04 }
+          - { arch: arm64, runner: ubuntu-22.04-arm }
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
 
     steps:
@@ -30,14 +35,20 @@ jobs:
             binutils curl python3 ripgrep unzip
 
       - name: Download release asset
-        run: scripts/download-release-desktop-assets.sh "${{ github.event.inputs.tag }}" linux-x64
+        run: scripts/download-release-desktop-assets.sh "${{ github.event.inputs.tag }}" linux-${{ matrix.arch }}
 
       - name: Verify release asset
-        run: scripts/verify-desktop-cli.sh "$FFMPEG_PACKAGING_TEST_ROOT/release-assets/${{ github.event.inputs.tag }}/linux-x64"
+        run: scripts/verify-desktop-cli.sh "$FFMPEG_PACKAGING_TEST_ROOT/release-assets/${{ github.event.inputs.tag }}/linux-${{ matrix.arch }}"
 
-  macos-universal-arm64:
-    name: macOS universal release asset on arm64
-    runs-on: macos-latest
+  macos:
+    name: macOS universal release asset on ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: arm64, runner: macos-latest }
+          - { arch: x64, runner: macos-15-intel }
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
 
     steps:
@@ -57,31 +68,15 @@ jobs:
       - name: Verify release asset
         run: scripts/verify-desktop-cli.sh "$FFMPEG_PACKAGING_TEST_ROOT/release-assets/${{ github.event.inputs.tag }}/darwin-universal"
 
-  macos-universal-x64:
-    name: macOS universal release asset on x64
-    runs-on: macos-15-intel
-    timeout-minutes: 30
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install host tools
-        run: brew install ripgrep
-
-      - name: Download release asset
-        run: scripts/download-release-desktop-assets.sh "${{ github.event.inputs.tag }}" darwin-universal
-
-      - name: Verify release asset
-        run: scripts/verify-desktop-cli.sh "$FFMPEG_PACKAGING_TEST_ROOT/release-assets/${{ github.event.inputs.tag }}/darwin-universal"
-
-  windows-x64:
-    name: Windows x64 release asset
-    runs-on: windows-2022
+  windows:
+    name: Windows ${{ matrix.arch }} release asset
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, runner: windows-2022 }
+          - { arch: arm64, runner: windows-11-arm }
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
 
     steps:
@@ -94,13 +89,13 @@ jobs:
 
       - name: Download release asset
         shell: bash
-        run: scripts/download-release-desktop-assets.sh "${{ github.event.inputs.tag }}" windows-x64
+        run: scripts/download-release-desktop-assets.sh "${{ github.event.inputs.tag }}" windows-${{ matrix.arch }}
 
       - name: Verify release asset
         shell: pwsh
         run: |
           python tests/desktop_cli/verify_media.py `
-            --ffmpeg "$env:FFMPEG_PACKAGING_TEST_ROOT/release-assets/${{ github.event.inputs.tag }}/windows-x64/ffmpeg.exe" `
-            --ffprobe "$env:FFMPEG_PACKAGING_TEST_ROOT/release-assets/${{ github.event.inputs.tag }}/windows-x64/ffprobe.exe" `
+            --ffmpeg "$env:FFMPEG_PACKAGING_TEST_ROOT/release-assets/${{ github.event.inputs.tag }}/windows-${{ matrix.arch }}/ffmpeg.exe" `
+            --ffprobe "$env:FFMPEG_PACKAGING_TEST_ROOT/release-assets/${{ github.event.inputs.tag }}/windows-${{ matrix.arch }}/ffprobe.exe" `
             --work-dir "$env:FFMPEG_PACKAGING_TEST_ROOT/work" `
-            --target windows-x64
+            --target windows-${{ matrix.arch }}

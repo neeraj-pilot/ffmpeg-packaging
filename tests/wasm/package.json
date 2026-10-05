@@ -1,0 +1,7 @@
+{
+  "name": "ffmpeg-wasm-tests",
+  "private": true,
+  "devDependencies": {
+    "@ffmpeg/ffmpeg": "0.12.15"
+  }
+}

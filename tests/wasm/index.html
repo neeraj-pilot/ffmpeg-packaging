@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" />
+  <title>FFmpeg browser verification</title>
+  <style>
+    body {
+      font: 16px system-ui;
+      max-width: 980px;
+      margin: 40px auto;
+      padding: 0 24px;
+      background: #f7faf8;
+      color: #15231b;
+    }
+    button,
+    select {
+      font: inherit;
+      padding: 10px 16px;
+      margin: 0 8px 16px 0;
+    }
+    pre {
+      background: #102219;
+      color: #d4f9df;
+      padding: 20px;
+      white-space: pre-wrap;
+      max-height: 600px;
+      overflow: auto;
+      border-radius: 8px;
+    }
+    video,
+    img {
+      max-width: 320px;
+      margin: 12px;
+    }
+    p {
+      line-height: 1.5;
+    }
+  </style>
+  <h1>FFmpeg browser verification</h1>
+  <p id="environment"></p>
+  <label
+    >Build
+    <select id="build">
+      <option value="new">Same-origin assets</option>
+      <option value="cross">Separate asset origin</option>
+    </select></label
+  >
+  <button id="run">Run smoke tests</button>
+  <button id="cancel" disabled>Cancel running encode</button>
+  <p id="status">Ready</p>
+  <div id="preview"></div>
+  <pre id="results"></pre>
+  <details>
+    <summary>FFmpeg logs</summary>
+    <pre id="logs"></pre>
+  </details>
+  <script src="./wrapper-umd/ffmpeg.js"></script>
+  <script type="module" src="./verify.js"></script>
+</html>

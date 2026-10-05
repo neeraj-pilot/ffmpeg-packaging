@@ -67,9 +67,4 @@ fetch_git_source() {
 fetch_git_source x264 "$X264_GIT_URL" "$X264_REVISION" "$(x264_source_dir)"
 fetch_git_source zimg "$ZIMG_GIT_URL" "$ZIMG_REVISION" "$(zimg_source_dir)"
 
-write_manifest "$SOURCES_ROOT/source-manifest.env" \
-  "FFMPEG_URL=$FFMPEG_URL" \
-  "X264_GIT_URL=$X264_GIT_URL" \
-  "ZIMG_GIT_URL=$ZIMG_GIT_URL"
-
 log "sources ready under $SOURCES_ROOT"

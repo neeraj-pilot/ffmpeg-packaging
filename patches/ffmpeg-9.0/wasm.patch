@@ -1,0 +1,291 @@
+--- a/fftools/ffmpeg.c
++++ b/fftools/ffmpeg.c
+@@ -242,15 +242,48 @@
+         atomic_store(&session->cancel_requested, 1);
+ }
+ 
++static int wasm_timeout_ms = -1;
++static int64_t wasm_deadline = INT64_MAX;
++
++void ffmpeg_wasm_set_timeout(int timeout_ms);
++void ffmpeg_wasm_begin(void);
++int ffmpeg_wasm_cancelled(void);
++
++void ffmpeg_wasm_set_timeout(int timeout_ms)
++{
++    wasm_timeout_ms = timeout_ms;
++}
++
++void ffmpeg_wasm_begin(void)
++{
++    wasm_deadline = wasm_timeout_ms < 0 ? INT64_MAX :
++        av_gettime_relative() + (int64_t)wasm_timeout_ms * 1000;
++}
++
++int ffmpeg_wasm_cancelled(void)
++{
++    return av_gettime_relative() >= wasm_deadline;
++}
++
+ static int ffmpeg_runtime_cancel_requested(void)
+ {
++    if (ffmpeg_wasm_cancelled())
++        return 1;
+     return ffmpeg_runtime_active_session &&
+            atomic_load(&ffmpeg_runtime_active_session->cancel_requested);
+ }
+ 
++void ffmpeg_wasm_progress(double progress, double time_us);
++
+ static void ffmpeg_runtime_forward_progress(int64_t pts, int is_final)
+ {
+     FfmpegSession *session = ffmpeg_runtime_active_session;
++    if (pts != AV_NOPTS_VALUE) {
++        const int64_t duration = nb_input_files ? input_files[0]->ctx->duration : 0;
++        const double progress = is_final ? 1 : duration > 0 ?
++            av_clipd((double)pts / duration, 0, 1) : 0;
++        ffmpeg_wasm_progress(progress, pts);
++    }
+ 
+     if (!session || !session->progress_cb)
+         return;
+@@ -1257,7 +1290,11 @@
+     return ret;
+ }
+ 
+-int main(int argc, char **argv)
+-{
++int ffmpeg_wasm_main(int argc, char **argv);
++
++int ffmpeg_wasm_main(int argc, char **argv)
++{
++    ffmpeg_wasm_begin();
++    av_log_set_callback(av_log_default_callback);
+     return ffmpeg_execute(NULL, argc, argv);
+ }
+--- a/fftools/ffprobe.c
++++ b/fftools/ffprobe.c
+@@ -90,8 +90,8 @@
+     int       nb_streams;
+ } InputFile;
+ 
+-const char program_name[] = "ffprobe";
+-const int program_birth_year = 2007;
++const char ffprobe_program_name[] = "ffprobe";
++const int ffprobe_program_birth_year = 2007;
+ 
+ static int do_analyze_frames = 0;
+ static int do_bitexact = 0;
+@@ -2556,6 +2556,14 @@
+     return codec;
+ }
+ 
++void ffmpeg_wasm_begin(void);
++int ffmpeg_wasm_cancelled(void);
++
++static int wasm_probe_interrupt(void *opaque)
++{
++    return ffmpeg_wasm_cancelled();
++}
++
+ static int open_input_file(InputFile *ifile, const char *filename,
+                            const char *print_filename)
+ {
+@@ -2564,10 +2572,11 @@
+     const AVDictionaryEntry *t = NULL;
+     int scan_all_pmts_set = 0;
+ 
+-    fmt_ctx = avformat_alloc_context();
++    fmt_ctx = ifile->fmt_ctx = avformat_alloc_context();
+     if (!fmt_ctx)
+         return AVERROR(ENOMEM);
+ 
++    fmt_ctx->interrupt_callback.callback = wasm_probe_interrupt;
+     err = set_decoders(fmt_ctx);
+     if (err < 0)
+         return err;
+@@ -2575,7 +2584,7 @@
+         av_dict_set(&format_opts, "scan_all_pmts", "1", AV_DICT_DONT_OVERWRITE);
+         scan_all_pmts_set = 1;
+     }
+-    if ((err = avformat_open_input(&fmt_ctx, filename,
++    if ((err = avformat_open_input(&ifile->fmt_ctx, filename,
+                                    iformat, &format_opts)) < 0) {
+         print_error(filename, err);
+         return err;
+@@ -2614,7 +2623,7 @@
+ 
+     ifile->streams = av_calloc(fmt_ctx->nb_streams, sizeof(*ifile->streams));
+     if (!ifile->streams)
+-        exit(1);
++        return AVERROR(ENOMEM);
+     ifile->nb_streams = fmt_ctx->nb_streams;
+ 
+     /* bind a decoder to each input stream */
+@@ -2630,20 +2639,26 @@
+             continue;
+ 
+         {
+-            AVDictionary *opts;
++            AVDictionary *opts = NULL;
+ 
+             err = filter_codec_opts(codec_opts, stream->codecpar->codec_id,
+                                     fmt_ctx, stream, codec, &opts, NULL);
+-            if (err < 0)
+-                exit(1);
++            if (err < 0) {
++                av_dict_free(&opts);
++                return err;
++            }
+ 
+             ist->dec_ctx = avcodec_alloc_context3(codec);
+-            if (!ist->dec_ctx)
+-                exit(1);
++            if (!ist->dec_ctx) {
++                av_dict_free(&opts);
++                return AVERROR(ENOMEM);
++            }
+ 
+             err = avcodec_parameters_to_context(ist->dec_ctx, stream->codecpar);
+-            if (err < 0)
+-                exit(1);
++            if (err < 0) {
++                av_dict_free(&opts);
++                return err;
++            }
+ 
+             if (do_show_log) {
+                 // For logging it is needed to disable at least frame threads as otherwise
+@@ -2656,15 +2671,18 @@
+ 
+             ist->dec_ctx->pkt_timebase = stream->time_base;
+ 
+-            if (avcodec_open2(ist->dec_ctx, codec, &opts) < 0) {
++            err = avcodec_open2(ist->dec_ctx, codec, &opts);
++            if (err < 0) {
+                 av_log(NULL, AV_LOG_WARNING, "Could not open codec for input stream %d\n",
+                        stream->index);
+-                exit(1);
++                av_dict_free(&opts);
++                return err;
+             }
+ 
+             if ((t = av_dict_iterate(opts, NULL))) {
+                 av_log(NULL, AV_LOG_ERROR, "Option %s for input stream %d not found\n",
+                        t->key, stream->index);
++                av_dict_free(&opts);
+                 return AVERROR_OPTION_NOT_FOUND;
+             }
+         }
+@@ -3042,7 +3060,9 @@
+     return print_input_filename ? 0 : AVERROR(ENOMEM);
+ }
+ 
+-void show_help_default(const char *opt, const char *arg)
++void ffprobe_show_help_default(const char *opt, const char *arg);
++
++void ffprobe_show_help_default(const char *opt, const char *arg)
+ {
+     av_log_set_callback(log_callback_help);
+     show_usage();
+@@ -3363,22 +3383,71 @@
+             do_show_##varname = 1;                                      \
+     } while (0)
+ 
+-int main(int argc, char **argv)
++int ffprobe_wasm_main(int argc, char **argv);
++
++int ffprobe_wasm_main(int argc, char **argv)
+ {
+     const AVTextFormatter *f;
+-    AVTextFormatContext *tctx;
+-    AVTextWriterContext *wctx;
++    AVTextFormatContext *tctx = NULL;
++    AVTextWriterContext *wctx = NULL;
+     char *buf;
+     char *f_name = NULL, *f_args = NULL;
+     int ret, input_ret;
+     AVTextFormatDataDump data_dump_format_id = AV_TEXTFORMAT_DATADUMP_XXD;
+ 
++    do_analyze_frames = 0;
++    do_bitexact = 0;
++    do_count_frames = 0;
++    do_count_packets = 0;
++    do_read_frames = 0;
++    do_read_packets = 0;
++    do_show_chapters = 0;
++    do_show_error = 0;
++    do_show_format = 0;
++    do_show_frames = 0;
++    do_show_packets = 0;
++    do_show_programs = 0;
++    do_show_stream_groups = 0;
++    do_show_stream_group_components = 0;
++    do_show_streams = 0;
++    do_show_stream_disposition = 0;
++    do_show_stream_group_disposition = 0;
++    do_show_data = 0;
++    do_show_program_version = 0;
++    do_show_library_versions = 0;
++    do_show_pixel_formats = 0;
++    do_show_pixel_format_flags = 0;
++    do_show_pixel_format_components = 0;
++    do_show_log = 0;
++    do_show_chapter_tags = 0;
++    do_show_format_tags = 0;
++    do_show_frame_tags = 0;
++    do_show_program_tags = 0;
++    do_show_stream_group_tags = 0;
++    do_show_stream_tags = 0;
++    do_show_packet_tags = 0;
++    show_value_unit = 0;
++    use_value_prefix = 0;
++    use_byte_value_binary_prefix = 0;
++    use_value_sexagesimal_format = 0;
++    show_private_data = 1;
++    show_optional_fields = SHOW_OPTIONAL_FIELDS_AUTO;
++    read_intervals_nb = 0;
++    find_stream_info = 1;
++    memset(selected_entries, 0, sizeof(selected_entries));
++    iformat = NULL;
++    nb_streams = 0;
++    av_log_set_level(AV_LOG_INFO);
++    av_log_set_callback(av_log_default_callback);
++
++    ffmpeg_wasm_begin();
+     init_dynload();
+ 
+     setvbuf(stderr, NULL, _IONBF, 0); /* win32 runtime needs this */
+ 
+     av_log_set_flags(AV_LOG_SKIP_REPEATED);
+ 
++    hide_banner = 0;
+     options = real_options;
+     parse_loglevel(argc, argv, options);
+     avformat_network_init();
+@@ -3528,11 +3597,25 @@
+     }
+ 
+ end:
++    av_log_set_callback(av_log_default_callback);
++    clear_log(0);
++    av_freep(&log_buffer);
++    if (wctx)
++        avtextwriter_context_close(&wctx);
++    if (tctx)
++        avtext_context_close(&tctx);
+     av_freep(&output_format);
+     av_freep(&output_filename);
+     av_freep(&input_filename);
+     av_freep(&print_input_filename);
+     av_freep(&read_intervals);
++    av_freep(&stream_specifier);
++    av_freep(&show_data_hash);
++    av_freep(&data_dump_format);
++    av_freep(&audio_codec_name);
++    av_freep(&video_codec_name);
++    av_freep(&subtitle_codec_name);
++    av_freep(&data_codec_name);
+ 
+     uninit_opts();
+     for (size_t i = 0; i < FF_ARRAY_ELEMS(selected_entries); ++i)

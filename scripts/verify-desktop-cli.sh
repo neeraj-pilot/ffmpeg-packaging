@@ -34,10 +34,29 @@ fi
 require_executable "$ffmpeg"
 require_executable "$ffprobe"
 
+if [ "$(uname -s)" = "Darwin" ]; then
+  for binary in "$ffmpeg" "$ffprobe"; do
+    load_commands="$WORK_ROOT/$(basename "$binary")-load-commands.txt"
+    otool -l "$binary" > "$load_commands"
+    python3 - "$binary" "$load_commands" "$DESKTOP_MACOS_MIN_VERSION" <<'PY'
+import re
+import sys
+
+binary, report, maximum = sys.argv[1:]
+with open(report, encoding="utf-8") as handle:
+    versions = re.findall(r"^\s+minos ([0-9.]+)$", handle.read(), re.M)
+def numeric_version(value):
+    return tuple(map(int, (value.split(".") + ["0", "0"])[:3]))
+if not versions or any(numeric_version(v) > numeric_version(maximum) for v in versions):
+    raise SystemExit(f"{binary} has macOS minimum versions {versions}; max allowed is {maximum}")
+PY
+  done
+fi
+
 if command -v ldd >/dev/null 2>&1 && [ "$(uname -s)" = "Linux" ]; then
   ldd "$ffmpeg" > "$WORK_ROOT/desktop-ffmpeg-ldd.txt"
-  if rg -q 'lib(x264|zimg)' "$WORK_ROOT/desktop-ffmpeg-ldd.txt"; then
-    die "desktop ffmpeg must link pinned x264/zimg statically"
+  if rg -q 'lib(x264|zimg|dav1d)' "$WORK_ROOT/desktop-ffmpeg-ldd.txt"; then
+    die "desktop ffmpeg must link pinned x264/zimg/dav1d statically"
   fi
 fi
 

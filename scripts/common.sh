@@ -39,6 +39,13 @@ require_dir() {
   [ -d "$1" ] || die "missing directory: $1"
 }
 
+require_mobile_build() {
+  local target="$1"
+  local manifest="$BUILD_ROOT/$target/package/build-manifest.env"
+  require_file "$manifest"
+  rg -qx "TARGET=$target" "$manifest" || die "$manifest does not match $target"
+}
+
 require_executable() {
   [ -x "$1" ] || die "missing executable: $1"
 }
@@ -107,8 +114,20 @@ zimg_source_dir() {
   printf '%s/zimg-%s\n' "$SOURCES_ROOT" "$ZIMG_REVISION"
 }
 
+fetch_dav1d_source() {
+  local archive="$DOWNLOADS_ROOT/dav1d-$DAV1D_VERSION.tar.xz"
+  if [ ! -f "$archive" ]; then
+    curl -fL "$DAV1D_URL" -o "$archive"
+  fi
+  verify_sha256 "$archive" "$DAV1D_SHA256"
+  if [ ! -d "$SOURCES_ROOT/dav1d-$DAV1D_VERSION" ]; then
+    tar -xf "$archive" -C "$SOURCES_ROOT"
+  fi
+}
+
 boundary_patch() {
-  printf '%s/patches/ffmpeg-8.1/ffmpeg-ffi-boundary.patch\n' "$REPO_ROOT"
+  printf '%s/patches/ffmpeg-%s/ffmpeg-runtime.patch\n' \
+    "$REPO_ROOT" "${FFMPEG_VERSION%.*}"
 }
 
 target_is_mobile() {
@@ -129,14 +148,12 @@ android_target_vars() {
   case "$1" in
     android-arm64)
       ABI=arm64-v8a
-      ANDROID_ARCH=aarch64
       ANDROID_CPU=armv8-a
       ANDROID_TRIPLE=aarch64-linux-android
       FFMPEG_ARCH=aarch64
       ;;
     android-armv7)
       ABI=armeabi-v7a
-      ANDROID_ARCH=armv7a
       ANDROID_CPU=armv7-a
       ANDROID_TRIPLE=armv7a-linux-androideabi
       FFMPEG_ARCH=arm
@@ -145,7 +162,7 @@ android_target_vars() {
       die "unknown Android target: $1"
       ;;
   esac
-  export ABI ANDROID_ARCH ANDROID_CPU ANDROID_TRIPLE FFMPEG_ARCH
+  export ABI ANDROID_CPU ANDROID_TRIPLE FFMPEG_ARCH
 }
 
 android_ndk_root() {
@@ -254,11 +271,6 @@ find_readelf() {
     command -v readelf
     return
   fi
-  if [ -n "${ANDROID_NDK_ROOT:-}" ]; then
-    find "$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt" \
-      -path '*/bin/llvm-readelf' \( -type f -o -type l \) -print -quit 2>/dev/null || true
-    return
-  fi
   if [ -n "${ANDROID_HOME:-}" ]; then
     find "$ANDROID_HOME/ndk" \
       -path '*/toolchains/llvm/prebuilt/*/bin/llvm-readelf' \( -type f -o -type l \) -print -quit 2>/dev/null || true
@@ -305,6 +317,12 @@ write_manifest() {
   local output="$1"
   shift
   {
+    printf 'PACKAGING_REVISION=%s\n' "$(git -C "$REPO_ROOT" rev-parse HEAD)"
+    if [ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]; then
+      printf 'PACKAGING_DIRTY=true\n'
+    else
+      printf 'PACKAGING_DIRTY=false\n'
+    fi
     printf 'FFMPEG_TAG=%s\n' "$FFMPEG_TAG"
     printf 'FFMPEG_SHA256=%s\n' "$FFMPEG_SHA256"
     printf 'X264_REVISION=%s\n' "$X264_REVISION"

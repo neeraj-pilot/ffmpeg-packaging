@@ -4,28 +4,24 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 ffmpeg_tree="${1:-$(ffmpeg_source_dir)}"
-audit_doc="$REPO_ROOT/docs/mobile-fftools-patch.md"
 patch_file="$(boundary_patch)"
 patched_tree="$WORK_ROOT/fftools-state-audit-patched"
 
 require_dir "$ffmpeg_tree/fftools"
-require_file "$audit_doc"
 require_file "$patch_file"
 require_cmd patch
 require_cmd python3
 
-reset_dir "$patched_tree"
-copy_clean_tree "$ffmpeg_tree" "$patched_tree"
+copy_clean_tree "$ffmpeg_tree/fftools" "$patched_tree/fftools"
 (cd "$patched_tree" && patch -p1 < "$patch_file" >/dev/null)
 
-python3 - "$ffmpeg_tree" "$patched_tree" "$audit_doc" <<'PY'
+python3 - "$ffmpeg_tree" "$patched_tree" <<'PY'
 import re
 import sys
 from pathlib import Path
 
 ffmpeg_tree = Path(sys.argv[1])
 patched_tree = Path(sys.argv[2])
-audit_doc = Path(sys.argv[3])
 
 expected = {
     "cmdutils.c": {
@@ -72,7 +68,6 @@ expected = {
         "vstats_filename",
         "dts_delta_threshold",
         "dts_error_threshold",
-        "video_sync_method",
         "frame_drop_threshold",
         "do_benchmark",
         "do_benchmark_all",
@@ -109,58 +104,23 @@ expected = {
     },
 }
 
-reset_expected = {
-    "nb_output_dumped",
-    "current_time",
-    "progress_avio",
-    "input_files",
-    "nb_input_files",
-    "output_files",
-    "nb_output_files",
-    "filtergraphs",
-    "nb_filtergraphs",
-    "decoders",
-    "nb_decoders",
-    "received_sigterm",
-    "received_nb_signals",
-    "transcode_init_done",
-    "ffmpeg_exited",
-    "copy_ts_first_pts",
-    "ffmpeg_ffi_report_last_time",
-    "ffmpeg_ffi_report_first_report",
-    "filter_hw_device",
-    "vstats_filename",
-    "dts_delta_threshold",
-    "dts_error_threshold",
-    "video_sync_method",
-    "frame_drop_threshold",
-    "do_benchmark",
-    "do_benchmark_all",
-    "do_hex_dump",
-    "do_pkt_dump",
-    "copy_ts",
-    "start_at_zero",
-    "copy_tb",
-    "debug_ts",
-    "exit_on_error",
-    "abort_on_flags",
-    "print_stats",
-    "stdin_interaction",
-    "max_error_rate",
-    "filter_nbthreads",
-    "filter_complex_nbthreads",
-    "filter_buffered_frames",
-    "vstats_version",
-    "print_graphs",
-    "print_graphs_file",
-    "print_graphs_format",
-    "auto_conversion_filters",
-    "stats_period",
-    "file_overwrite",
-    "no_file_overwrite",
-    "ignore_unknown_streams",
-    "copy_unknown_streams",
-    "recast_media",
+# These globals are released by upstream cleanup, retain host state, or are
+# inactive/log-only in the embedded API. Everything else must be reset.
+reset_exemptions = {
+    # uninit_opts, hw_device_free_all, of_enc_stats_close, and command cleanup.
+    "sws_dict", "swr_opts", "format_opts", "codec_opts", "vstats_file",
+    "nb_hw_devices", "hw_devices", "enc_stats_files", "nb_enc_stats_files",
+    # Terminal state is untouched in embedded mode; int_cb is constant.
+    "oldtty", "restore_tty", "int_cb",
+    # Windows argv conversion is inactive; reports are unsupported.
+    "hide_banner", "win32_argv_utf8", "win32_argc",
+    "report_file", "report_file_level", "warned_cfg",
+}
+upstream_symbols = set().union(*expected.values())
+assert reset_exemptions <= upstream_symbols, "stale state-audit exemption"
+reset_expected = (upstream_symbols - reset_exemptions) | {
+    "ffmpeg_runtime_report_last_time",
+    "ffmpeg_runtime_report_first_report",
 }
 
 type_re = re.compile(
@@ -260,18 +220,10 @@ for filename, expected_names in expected.items():
     if unexpected:
         errors.append(f"{filename}: undocumented command state: {', '.join(unexpected)}")
 
-doc_text = audit_doc.read_text(encoding="utf-8")
-for filename, expected_names in expected.items():
-    if filename not in doc_text:
-        errors.append(f"{filename}: source file missing from audit doc")
-    for name in sorted(expected_names):
-        if f"`{name}`" not in doc_text:
-            errors.append(f"{filename}: `{name}` missing from audit doc")
-
 reset_body = (
-    function_body(patched_tree / "fftools" / "ffmpeg.c", "ffmpeg_ffi_reset_run_state")
+    function_body(patched_tree / "fftools" / "ffmpeg.c", "ffmpeg_runtime_reset_run_state")
     + "\n"
-    + function_body(patched_tree / "fftools" / "ffmpeg_opt.c", "ffmpeg_ffi_reset_options_state")
+    + function_body(patched_tree / "fftools" / "ffmpeg_opt.c", "ffmpeg_runtime_reset_options_state")
 )
 for name in sorted(reset_expected):
     if not body_assigns_name(reset_body, name):
