@@ -8,7 +8,7 @@ usage() {
 Usage:
   scripts/package-ios-xcframework.sh [output-xcframework]
 
-Packages iOS build outputs into DIST_ROOT/mobile/ios/ffmpeg.xcframework by
+Packages iOS build outputs into DIST_ROOT/mobile/ios/ffmpeg_ffi.xcframework by
 default.
 USAGE
 }
@@ -26,7 +26,7 @@ require_cmd otool
 require_cmd rg
 ensure_common_dirs
 
-output="${1:-$DIST_ROOT/mobile/ios/ffmpeg.xcframework}"
+output="${1:-$DIST_ROOT/mobile/ios/ffmpeg_ffi.xcframework}"
 device_lib="$BUILD_ROOT/ios-device-arm64/package/ffmpeg_ffi.dylib"
 sim_lib="$BUILD_ROOT/ios-sim-arm64/package/ffmpeg_ffi.dylib"
 headers="$REPO_ROOT/include"
@@ -100,7 +100,7 @@ while IFS= read -r -d '' framework; do
   symbols="$WORK_ROOT/$(basename "$(dirname "$framework")")-symbols.txt"
   install_name="$WORK_ROOT/$(basename "$(dirname "$framework")")-install-name.txt"
   nm -gU "$lib" > "$symbols"
-  for symbol in _ffmpeg_session_new _ffmpeg_session_free _ffmpeg_execute _ffmpeg_cancel _ffmpeg_probe_media_json _ffmpeg_free_string; do
+  for symbol in _ffmpeg_session_new _ffmpeg_session_free _ffmpeg_session_output _ffmpeg_execute _ffmpeg_cancel _ffmpeg_probe_media_json _ffmpeg_free_string; do
     rg -q "$symbol" "$symbols" || die "$lib missing symbol $symbol"
   done
   otool -D "$lib" > "$install_name"

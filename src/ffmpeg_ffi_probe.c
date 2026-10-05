@@ -3,19 +3,36 @@
 #include "libavutil/avstring.h"
 #include "libavutil/bprint.h"
 #include "libavutil/dict.h"
+#include "libavutil/display.h"
 #include "libavutil/error.h"
 #include "libavutil/mem.h"
+#include "libavutil/pixdesc.h"
 #include "libavutil/rational.h"
 
 #include <inttypes.h>
+#include <math.h>
 #include <stdint.h>
+#include <string.h>
+
+void ffmpeg_ffi_init_logging(void);
 
 static void json_string(AVBPrint *out, const char *value)
 {
     const unsigned char *p = (const unsigned char *)(value ? value : "");
+    const unsigned char *end = p + strlen((const char *)p);
 
     av_bprint_chars(out, '"', 1);
     for (; *p; p++) {
+        if (*p >= 0x80) {
+            const unsigned char *start = p;
+            int32_t codepoint;
+            if (av_utf8_decode(&codepoint, &p, end, 0) < 0)
+                av_bprintf(out, "\\ufffd");
+            else
+                av_bprint_append_data(out, (const char *)start, p - start);
+            p--;
+            continue;
+        }
         switch (*p) {
         case '"':
             av_bprintf(out, "\\\"");
@@ -133,6 +150,8 @@ static void json_stream(AVBPrint *out, const AVStream *stream)
     av_bprint_chars(out, '{', 1);
     json_int_field(out, &first, "index", stream->index);
     json_string_field(out, &first, "codec_name", codec_name);
+    json_string_field(out, &first, "profile",
+                      avcodec_profile_name(codec->codec_id, codec->profile));
     json_string_field(out, &first, "codec_type",
                       av_get_media_type_string(codec->codec_type));
     json_rational_field(out, &first, "r_frame_rate", stream->r_frame_rate);
@@ -140,14 +159,56 @@ static void json_stream(AVBPrint *out, const AVStream *stream)
     json_time_field(out, &first, "duration", stream->duration,
                     stream->time_base);
     json_string_i64_field(out, &first, "bit_rate", codec->bit_rate);
+    json_string_i64_field(out, &first, "nb_frames", stream->nb_frames);
+    json_rational_field(out, &first, "time_base", stream->time_base);
+    json_time_field(out, &first, "start_time", stream->start_time,
+                    stream->time_base);
 
     if (codec->codec_type == AVMEDIA_TYPE_VIDEO) {
         json_int_field(out, &first, "width", codec->width);
         json_int_field(out, &first, "height", codec->height);
+        const AVRational sar = av_guess_sample_aspect_ratio(NULL, (AVStream *)stream, NULL);
+        if (sar.num > 0 && sar.den > 0) {
+            json_comma(out, &first);
+            av_bprintf(out, "\"sample_aspect_ratio\":\"%d:%d\"", sar.num, sar.den);
+        }
+        json_string_field(out, &first, "pix_fmt", av_get_pix_fmt_name(codec->format));
+        json_string_field(out, &first, "color_range", av_color_range_name(codec->color_range));
+        json_string_field(out, &first, "color_space", av_color_space_name(codec->color_space));
+        json_string_field(out, &first, "color_transfer", av_color_transfer_name(codec->color_trc));
+        json_string_field(out, &first, "color_primaries", av_color_primaries_name(codec->color_primaries));
+        json_int_field(out, &first, "level", codec->level);
+
+        const AVPacketSideData *matrix = av_packet_side_data_get(
+            codec->coded_side_data, codec->nb_coded_side_data,
+            AV_PKT_DATA_DISPLAYMATRIX);
+        if (matrix && matrix->size >= 9 * sizeof(int32_t)) {
+            const double rotation = av_display_rotation_get((int32_t *)matrix->data);
+            if (!isnan(rotation)) {
+                json_comma(out, &first);
+                av_bprintf(out, "\"side_data_list\":[{\"side_data_type\":\"Display Matrix\","
+                                "\"rotation\":%.0f}]", rotation);
+            }
+        }
     } else if (codec->codec_type == AVMEDIA_TYPE_AUDIO) {
+        char layout[128];
         json_string_i64_field(out, &first, "sample_rate", codec->sample_rate);
         json_int_field(out, &first, "channels", codec->ch_layout.nb_channels);
+        if (av_channel_layout_describe(&codec->ch_layout, layout, sizeof(layout)) >= 0)
+            json_string_field(out, &first, "channel_layout", layout);
     }
+
+    json_comma(out, &first);
+    json_key(out, "disposition");
+    av_bprint_chars(out, '{', 1);
+    int first_disposition = 1;
+    for (unsigned int bit = 0; bit < 31; bit++) {
+        const int flag = 1U << bit;
+        const char *name = av_disposition_to_string(flag);
+        if (name)
+            json_int_field(out, &first_disposition, name, !!(stream->disposition & flag));
+    }
+    av_bprint_chars(out, '}', 1);
 
     if (stream->metadata) {
         json_comma(out, &first);
@@ -166,6 +227,7 @@ int ffmpeg_probe_media_json(const char *path, char **json_out)
     if (!path || !json_out)
         return AVERROR(EINVAL);
     *json_out = NULL;
+    ffmpeg_ffi_init_logging();
 
     ret = avformat_open_input(&format, path, NULL, NULL);
     if (ret < 0)

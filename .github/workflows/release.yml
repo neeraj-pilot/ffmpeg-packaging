@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag, for example ffmpeg-8.1.2-pilot.2
+        description: Release tag, for example ffmpeg-9.0.2-pilot.2
         required: true
-        default: ffmpeg-8.1.2-pilot.2
+        default: ffmpeg-9.0.2-pilot.2
       prerelease:
         description: Mark the GitHub release as a prerelease
         required: true
@@ -35,6 +35,8 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: ''
 
       - name: Install pinned Android NDK
         shell: bash
@@ -106,14 +108,20 @@ jobs:
         with:
           name: release-ios
           path: |
-            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/mobile/ios/ffmpeg.xcframework.tar.gz
-            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/mobile/ios/ffmpeg.xcframework.tar.gz.sha256
-            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/mobile/ios/ffmpeg.xcframework.manifest.env
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/mobile/ios/ffmpeg_ffi.xcframework.tar.gz
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/mobile/ios/ffmpeg_ffi.xcframework.tar.gz.sha256
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/mobile/ios/ffmpeg_ffi.xcframework.manifest.env
           if-no-files-found: error
 
-  desktop-linux-x64:
-    name: Desktop Linux x64
-    runs-on: ubuntu-22.04
+  desktop-linux:
+    name: Desktop Linux ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, runner: ubuntu-22.04 }
+          - { arch: arm64, runner: ubuntu-22.04-arm }
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
 
     steps:
@@ -124,22 +132,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             autoconf automake binutils curl g++ git libtool make nasm pkg-config ripgrep \
-            python3 xz-utils zlib1g-dev
+            meson ninja-build python3 xz-utils zlib1g-dev
 
       - name: Build desktop CLI
-        run: scripts/build-desktop-cli.sh desktop-linux-x64
+        run: scripts/build-desktop-cli.sh desktop-linux-${{ matrix.arch }}
 
       - name: Verify desktop CLI
-        run: scripts/verify-desktop-cli.sh "$FFMPEG_PACKAGING_TEST_ROOT/dist/desktop/linux-x64"
+        run: scripts/verify-desktop-cli.sh "$FFMPEG_PACKAGING_TEST_ROOT/dist/desktop/linux-${{ matrix.arch }}"
 
       - name: Upload desktop assets
         uses: actions/upload-artifact@v4
         with:
-          name: release-desktop-linux-x64
+          name: release-desktop-linux-${{ matrix.arch }}
           path: |
-            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/desktop/linux-x64/ffmpeg.tar.gz
-            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/desktop/linux-x64/ffmpeg.tar.gz.sha256
-            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/desktop/linux-x64/ffmpeg.tar.gz.manifest.env
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/desktop/linux-${{ matrix.arch }}/ffmpeg.tar.gz
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/desktop/linux-${{ matrix.arch }}/ffmpeg.tar.gz.sha256
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/desktop/linux-${{ matrix.arch }}/ffmpeg.tar.gz.manifest.env
           if-no-files-found: error
 
   desktop-macos-universal:
@@ -173,7 +181,7 @@ jobs:
       - name: Install host tools and libraries
         run: |
           brew update
-          brew install autoconf automake libtool nasm pkg-config ripgrep
+          brew install autoconf automake libtool meson nasm ninja pkg-config ripgrep
 
       - name: Build desktop CLI
         run: scripts/build-desktop-cli.sh desktop-darwin-universal
@@ -205,7 +213,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             autoconf automake binutils-mingw-w64-x86-64 curl g++ git \
             g++-mingw-w64-x86-64 gcc-mingw-w64-x86-64 libtool \
-            libz-mingw-w64-dev make nasm pkg-config ripgrep unzip xz-utils zip
+            libz-mingw-w64-dev make meson nasm ninja-build pkg-config ripgrep unzip xz-utils zip
           sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix
           sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix
 
@@ -223,6 +231,57 @@ jobs:
             ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/desktop/windows-x64/ffmpeg.zip
             ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/desktop/windows-x64/ffmpeg.zip.sha256
             ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/desktop/windows-x64/ffmpeg.zip.manifest.env
+          if-no-files-found: error
+
+  desktop-windows-arm64:
+    name: Desktop Windows ARM64
+    runs-on: windows-11-arm
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Keep shell scripts in LF format
+        shell: pwsh
+        run: git config --global core.autocrlf input
+
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+        with:
+          msystem: CLANGARM64
+          update: true
+          install: >-
+            autoconf automake curl git libtool make patch pkgconf unzip xz zip
+            mingw-w64-clang-aarch64-toolchain
+            mingw-w64-clang-aarch64-meson
+            mingw-w64-clang-aarch64-python
+            mingw-w64-clang-aarch64-ripgrep
+            mingw-w64-clang-aarch64-zlib
+
+      - name: Build and verify ARM64 archive
+        env:
+          CC: clang
+          CXX: clang++
+          AR: llvm-ar
+          RANLIB: llvm-ranlib
+          STRIP: llvm-strip
+          OBJDUMP: llvm-objdump
+          PKG_CONFIG_DONT_DEFINE_PREFIX: "1"
+        run: |
+          export FFMPEG_PACKAGING_TEST_ROOT="$(cygpath -u "$FFMPEG_PACKAGING_TEST_ROOT")"
+          scripts/build-desktop-cli.sh desktop-windows-arm64
+          scripts/verify-desktop-windows.sh "$FFMPEG_PACKAGING_TEST_ROOT/dist/desktop/windows-arm64" desktop-windows-arm64
+
+      - name: Upload desktop assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-desktop-windows-arm64
+          path: |
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/desktop/windows-arm64/ffmpeg.zip
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/desktop/windows-arm64/ffmpeg.zip.sha256
+            ${{ env.FFMPEG_PACKAGING_TEST_ROOT }}/dist/desktop/windows-arm64/ffmpeg.zip.manifest.env
           if-no-files-found: error
 
   desktop-macos-universal-intel-runtime:
@@ -257,11 +316,18 @@ jobs:
           tar -xzf release-desktop-darwin-universal/ffmpeg.tar.gz -C artifact
           scripts/verify-desktop-cli.sh "$PWD/artifact"
 
-  desktop-windows-x64-runtime:
-    name: Desktop Windows x64 runtime
-    runs-on: windows-2022
+  desktop-windows-runtime:
+    name: Desktop Windows ${{ matrix.arch }} runtime
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, runner: windows-2022 }
+          - { arch: arm64, runner: windows-11-arm }
+    runs-on: ${{ matrix.runner }}
     needs:
       - desktop-windows-x64
+      - desktop-windows-arm64
     timeout-minutes: 30
 
     steps:
@@ -275,19 +341,19 @@ jobs:
       - name: Download Windows desktop artifact
         uses: actions/download-artifact@v4
         with:
-          name: release-desktop-windows-x64
-          path: release-desktop-windows-x64
+          name: release-desktop-windows-${{ matrix.arch }}
+          path: release-desktop-windows
 
       - name: Verify Windows binaries
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path artifact | Out-Null
-          Expand-Archive -Path release-desktop-windows-x64/ffmpeg.zip -DestinationPath artifact -Force
+          Expand-Archive -Path release-desktop-windows/ffmpeg.zip -DestinationPath artifact -Force
           python tests/desktop_cli/verify_media.py `
             --ffmpeg artifact/ffmpeg.exe `
             --ffprobe artifact/ffprobe.exe `
             --work-dir "$env:FFMPEG_PACKAGING_TEST_ROOT/work" `
-            --target windows-x64
+            --target windows-${{ matrix.arch }}
 
   publish:
     name: Publish GitHub release
@@ -295,11 +361,12 @@ jobs:
     needs:
       - android
       - ios
-      - desktop-linux-x64
+      - desktop-linux
       - desktop-macos-universal
       - desktop-windows-x64
+      - desktop-windows-arm64
       - desktop-macos-universal-intel-runtime
-      - desktop-windows-x64-runtime
+      - desktop-windows-runtime
 
     steps:
       - uses: actions/checkout@v4
@@ -322,21 +389,18 @@ jobs:
           cp release-assets/release-android/ffmpeg.aar.sha256 release-upload/android-ffmpeg.aar.sha256
           cp release-assets/release-android/ffmpeg.aar.manifest.env release-upload/android-ffmpeg.aar.manifest.env
 
-          cp release-assets/release-ios/ffmpeg.xcframework.tar.gz release-upload/ios-ffmpeg.xcframework.tar.gz
-          cp release-assets/release-ios/ffmpeg.xcframework.tar.gz.sha256 release-upload/ios-ffmpeg.xcframework.tar.gz.sha256
-          cp release-assets/release-ios/ffmpeg.xcframework.manifest.env release-upload/ios-ffmpeg.xcframework.manifest.env
+          cp release-assets/release-ios/ffmpeg_ffi.xcframework.tar.gz release-upload/ios-ffmpeg_ffi.xcframework.tar.gz
+          cp release-assets/release-ios/ffmpeg_ffi.xcframework.tar.gz.sha256 release-upload/ios-ffmpeg_ffi.xcframework.tar.gz.sha256
+          cp release-assets/release-ios/ffmpeg_ffi.xcframework.manifest.env release-upload/ios-ffmpeg_ffi.xcframework.manifest.env
 
-          cp release-assets/release-desktop-linux-x64/ffmpeg.tar.gz release-upload/linux-x64-ffmpeg.tar.gz
-          cp release-assets/release-desktop-linux-x64/ffmpeg.tar.gz.sha256 release-upload/linux-x64-ffmpeg.tar.gz.sha256
-          cp release-assets/release-desktop-linux-x64/ffmpeg.tar.gz.manifest.env release-upload/linux-x64-ffmpeg.tar.gz.manifest.env
-
-          cp release-assets/release-desktop-darwin-universal/ffmpeg.tar.gz release-upload/darwin-universal-ffmpeg.tar.gz
-          cp release-assets/release-desktop-darwin-universal/ffmpeg.tar.gz.sha256 release-upload/darwin-universal-ffmpeg.tar.gz.sha256
-          cp release-assets/release-desktop-darwin-universal/ffmpeg.tar.gz.manifest.env release-upload/darwin-universal-ffmpeg.tar.gz.manifest.env
-
-          cp release-assets/release-desktop-windows-x64/ffmpeg.zip release-upload/windows-x64-ffmpeg.zip
-          cp release-assets/release-desktop-windows-x64/ffmpeg.zip.sha256 release-upload/windows-x64-ffmpeg.zip.sha256
-          cp release-assets/release-desktop-windows-x64/ffmpeg.zip.manifest.env release-upload/windows-x64-ffmpeg.zip.manifest.env
+          for target in linux-x64 linux-arm64 darwin-universal windows-x64 windows-arm64; do
+            extension=tar.gz
+            [[ "$target" == windows-* ]] && extension=zip
+            for suffix in "" .sha256 .manifest.env; do
+              cp "release-assets/release-desktop-$target/ffmpeg.$extension$suffix" \
+                "release-upload/$target-ffmpeg.$extension$suffix"
+            done
+          done
 
           mapfile -t assets < <(find release-upload -type f | sort)
           if [ "${#assets[@]}" -eq 0 ]; then
@@ -347,10 +411,10 @@ jobs:
           notes="$(cat <<NOTES
           Pilot FFmpeg packaging release from workflow run $GITHUB_RUN_ID.
 
-          Includes Android AAR, iOS xcframework, Linux x64 CLI, macOS universal CLI, and Windows x64 CLI artifacts.
+          Includes Android AAR, iOS xcframework, Linux x64/ARM64 CLI, macOS universal CLI, and Windows x64/ARM64 CLI artifacts.
           NOTES
           )"
-          args=(release create "$TAG" --title "$TAG" --notes "$notes")
+          args=(release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --notes "$notes")
           if [ "$PRERELEASE" = "true" ]; then
             args+=(--prerelease)
           fi

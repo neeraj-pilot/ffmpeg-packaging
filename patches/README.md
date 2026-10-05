@@ -2,11 +2,15 @@
 
 Production patches live here as reviewable files.
 
-Current patch:
+FFmpeg patch:
 
 ```text
-patches/ffmpeg-8.1/ffmpeg-ffi-boundary.patch
+patches/ffmpeg-9.0/ffmpeg-ffi-boundary.patch
 ```
+
+`patches/x264/encoder-open-cleanup.patch` separately releases parameter strings
+when opening an encoder fails. Both mobile and desktop builds apply it. See
+`../docs/dependency-review.md` for its provenance and ownership analysis.
 
 Patch rules:
 

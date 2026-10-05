@@ -54,14 +54,16 @@ for abi in arm64-v8a armeabi-v7a; do
   require_file "$wrapper"
   "$readelf_bin" -Ws "$wrapper" > "$WORK_ROOT/$abi-libffmpeg-ffi.symbols"
   "$readelf_bin" -d "$wrapper" > "$WORK_ROOT/$abi-libffmpeg-ffi.dynamic"
-  for symbol in ffmpeg_session_new ffmpeg_session_free ffmpeg_execute ffmpeg_cancel ffmpeg_probe_media_json ffmpeg_free_string; do
+  for symbol in ffmpeg_session_new ffmpeg_session_free ffmpeg_session_output ffmpeg_execute ffmpeg_cancel ffmpeg_probe_media_json ffmpeg_free_string; do
     rg -q "[[:space:]]$symbol([[:space:]]|$)" "$WORK_ROOT/$abi-libffmpeg-ffi.symbols" ||
       die "$wrapper missing exported symbol $symbol"
   done
-  for needed in libavdevice.so libavfilter.so libavformat.so libavcodec.so libswresample.so libswscale.so libavutil.so; do
-    rg -q "Shared library: \\[$needed\\]" "$WORK_ROOT/$abi-libffmpeg-ffi.dynamic" ||
-      die "$wrapper missing dependency $needed"
-  done
+  if find "$stage/jni/$abi" -name '*.so' ! -name 'libffmpeg_ffi.so' -print -quit | rg -q .; then
+    die "$abi must contain only libffmpeg_ffi.so"
+  fi
+  if rg -q 'Shared library: \[lib(av|sw|x264|zimg)' "$WORK_ROOT/$abi-libffmpeg-ffi.dynamic"; then
+    die "$wrapper must statically contain its media libraries"
+  fi
   for lib in "$stage/jni/$abi"/*.so; do
     dynamic="$WORK_ROOT/$abi-$(basename "$lib").dynamic"
     "$readelf_bin" -d "$lib" > "$dynamic"

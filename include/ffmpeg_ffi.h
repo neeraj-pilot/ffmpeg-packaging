@@ -16,8 +16,13 @@ typedef struct FfmpegFfiSession FfmpegFfiSession;
 FfmpegFfiSession *ffmpeg_session_new(ffmpeg_progress_callback progress_cb,
                                      void *progress_opaque);
 
+/* Free only after execute returns; no callbacks occur after that return. */
 void ffmpeg_session_free(FfmpegFfiSession *session);
 
+/* Borrowed diagnostic bytes; truncation may split UTF-8. Read after execute. */
+const char *ffmpeg_session_output(FfmpegFfiSession *session);
+
+/* A session runs once. Cancellation before execution is preserved. */
 int ffmpeg_execute(FfmpegFfiSession *session, int argc, char **argv);
 
 void ffmpeg_cancel(FfmpegFfiSession *session);
