@@ -3,7 +3,7 @@
 Patch file:
 
 ```text
-patches/ffmpeg-8.1/ffmpeg-ffi-boundary.patch
+patches/ffmpeg-9.0/ffmpeg-ffi-boundary.patch
 ```
 
 This is the only FFmpeg source patch. It is mobile-only and limited to the
@@ -38,6 +38,7 @@ Added in `fftools/ffmpeg.c`:
 - `FfmpegFfiSession`
 - `ffmpeg_session_new`
 - `ffmpeg_session_free`
+- `ffmpeg_session_output`
 - `ffmpeg_execute`
 - `ffmpeg_cancel`
 
@@ -101,8 +102,12 @@ asserts the handlers are still present afterward.
 - final return-code mapping, so cancellation returns `255`
 
 The patch does not kill threads or use `longjmp`. Cancellation is cooperative.
-The harness covers normal MP4 cancellation, immediate cancellation, and a
-Photos-shaped HLS/AES single-file cancel command.
+The harness covers normal MP4 cancellation, immediate cancellation, stalled
+input and output I/O, and a Photos-shaped HLS/AES single-file cancel command.
+
+A session is single-use. A cancellation requested before `ffmpeg_execute`
+starts is retained and returns `255` without opening its output. The caller
+must wait for execution to return before freeing the session.
 
 ### Progress Callback
 
@@ -112,6 +117,20 @@ does not inherit progress timing state.
 
 Callbacks are suppressed after teardown begins. The harness asserts there are no
 late callbacks after `ffmpeg_execute(...)` returns.
+
+### Diagnostics
+
+The wrapper installs its own libav log callback once. Android and iOS both
+statically contain their media libraries and hide their symbols, so this does
+not replace media_kit's callback. Warnings and errors are kept in an 8191-byte
+tail owned by the active session. `ffmpeg_session_output` returns that buffer
+after execution; the caller copies it before freeing the session.
+
+The callback uses a mutex when accessing the active session. Probe operations
+may run concurrently, so their warnings can appear in this diagnostic tail.
+Probe failure is also reported separately by its return code. Log callbacks
+stay in native code; Dart copies the diagnostic string after completion.
+Each command resets the log level before parsing its own options.
 
 ## Out Of Scope
 
@@ -155,8 +174,7 @@ Reset by `ffmpeg_ffi_reset_options_state(...)` in patched
 `fftools/ffmpeg_opt.c`:
 
 - `filter_hw_device`, `vstats_filename`
-- `dts_delta_threshold`, `dts_error_threshold`
-- `video_sync_method`, `frame_drop_threshold`
+- `dts_delta_threshold`, `dts_error_threshold`, `frame_drop_threshold`
 - `do_benchmark`, `do_benchmark_all`
 - `do_hex_dump`, `do_pkt_dump`
 - `copy_ts`, `start_at_zero`, `copy_tb`
@@ -219,6 +237,9 @@ argv conversion state and are inactive on Android/iOS.
 Embedded mobile commands must not use `-report` or `FFREPORT` until explicit
 cleanup/reset is added for `report_file` and `report_file_level`. `warned_cfg`
 is a one-time warning flag, not media state.
+
+The embedded API supports media processing commands, not CLI help/version
+printers. Those commands replace libav's log callback with a stdout printer.
 
 ## Mobile Release Proof
 

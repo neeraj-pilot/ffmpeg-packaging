@@ -6,7 +6,7 @@ on:
       tag:
         description: Release tag to download and verify
         required: true
-        default: ffmpeg-8.1.2-pilot.2
+        default: ffmpeg-9.0.2-pilot.1
 
 permissions:
   contents: read

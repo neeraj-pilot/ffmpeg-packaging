@@ -8,7 +8,7 @@ vendoring downloaded sources or generated outputs.
 | Platform | Artifact |
 | --- | --- |
 | Android | `dist/mobile/android/ffmpeg.aar` |
-| iOS | `dist/mobile/ios/ffmpeg.xcframework` |
+| iOS | `dist/mobile/ios/ffmpeg_ffi.xcframework` |
 | macOS | `dist/desktop/darwin-universal/ffmpeg.tar.gz` |
 | Linux | `dist/desktop/linux-x64/ffmpeg.tar.gz` |
 | Windows | `dist/desktop/windows-x64/ffmpeg.zip` |

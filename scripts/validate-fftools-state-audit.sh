@@ -15,7 +15,7 @@ require_cmd patch
 require_cmd python3
 
 reset_dir "$patched_tree"
-copy_clean_tree "$ffmpeg_tree" "$patched_tree"
+copy_clean_tree "$ffmpeg_tree/fftools" "$patched_tree/fftools"
 (cd "$patched_tree" && patch -p1 < "$patch_file" >/dev/null)
 
 python3 - "$ffmpeg_tree" "$patched_tree" "$audit_doc" <<'PY'
@@ -72,7 +72,6 @@ expected = {
         "vstats_filename",
         "dts_delta_threshold",
         "dts_error_threshold",
-        "video_sync_method",
         "frame_drop_threshold",
         "do_benchmark",
         "do_benchmark_all",
@@ -132,7 +131,6 @@ reset_expected = {
     "vstats_filename",
     "dts_delta_threshold",
     "dts_error_threshold",
-    "video_sync_method",
     "frame_drop_threshold",
     "do_benchmark",
     "do_benchmark_all",

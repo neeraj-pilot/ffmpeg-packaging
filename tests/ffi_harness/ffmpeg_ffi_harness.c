@@ -11,6 +11,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
 
 #define ARGC(args) ((int)(sizeof(args) / sizeof((args)[0]) - 1))
 
@@ -604,6 +606,109 @@ static void run_probe(const char *path)
     ffmpeg_free_string(json);
 }
 
+static void run_pre_cancelled(int argc, char **argv)
+{
+    FfmpegFfiSession *session = ffmpeg_session_new(NULL, NULL);
+    ffmpeg_cancel(session);
+    const int ret = ffmpeg_execute(session, argc, argv);
+    if (ret == 255 && access("overlap.mp4", F_OK) != 0)
+        ok("cancel-before-execute");
+    else
+        fail("cancel-before-execute", "started a cancelled command");
+    ffmpeg_session_free(session);
+}
+
+static void run_stalled_io(int output)
+{
+    const char *name = output ? "stalled-output-cancel" : "stalled-input-cancel";
+    struct sockaddr_in address = { .sin_family = AF_INET,
+                                   .sin_addr.s_addr = htonl(INADDR_LOOPBACK) };
+    socklen_t address_size = sizeof(address);
+    int listener = socket(AF_INET, SOCK_STREAM, 0);
+    if (listener < 0 || bind(listener, (struct sockaddr *)&address, address_size) ||
+        listen(listener, 1) ||
+        getsockname(listener, (struct sockaddr *)&address, &address_size)) {
+        fail(name, "could not create loopback peer");
+        if (listener >= 0) close(listener);
+        return;
+    }
+
+    // The listening peer never consumes or supplies media. Its small receive
+    // buffer makes raw-video output block in a write; input blocks while probing.
+    int receive_buffer = 1024;
+    setsockopt(listener, SOL_SOCKET, SO_RCVBUF, &receive_buffer, sizeof(receive_buffer));
+    char url[128];
+    snprintf(url, sizeof(url), "tcp://127.0.0.1:%d", ntohs(address.sin_port));
+    char *input_argv[] = {
+        "ffmpeg", "-nostdin", "-f", "mpegts", "-i", url,
+        "-f", "null", "-", NULL,
+    };
+    char *output_argv[] = {
+        "ffmpeg", "-nostdin", "-f", "lavfi", "-i",
+        "testsrc2=size=1280x720:rate=30", "-c:v", "rawvideo",
+        "-f", "rawvideo", url, NULL,
+    };
+    if (output)
+        run_cancelled(name, ARGC(output_argv), output_argv, 1000000);
+    else
+        run_cancelled(name, ARGC(input_argv), input_argv, 1000000);
+    close(listener);
+}
+
+static void run_diagnostics(void)
+{
+    char *quiet[] = {
+        "ffmpeg", "-loglevel", "quiet", "-i", "normal.mp4",
+        "-frames:v", "1", "-f", "null", "-", NULL,
+    };
+    run_command("quiet-command", ARGC(quiet), quiet, 0);
+    char *argv[] = { "ffmpeg", "-ente_nonexistent_option", NULL };
+    FfmpegFfiSession *session = ffmpeg_session_new(NULL, NULL);
+    const int ret = ffmpeg_execute(session, ARGC(argv), argv);
+    const char *output = ffmpeg_session_output(session);
+    if (ret != 0 && strstr(output, "ente_nonexistent_option") && strlen(output) < 8192)
+        ok("diagnostics");
+    else
+        fail("diagnostics", "missing bounded command diagnostics");
+    ffmpeg_session_free(session);
+}
+
+static void run_metadata_probe(void)
+{
+    char *argv[] = {
+        "ffmpeg", "-y", "-display_rotation", "90", "-i", "normal.mp4",
+        "-c", "copy", "-metadata", "comment=caf\xe9", "rotated.mp4", NULL,
+    };
+    const char *fields[] = {
+        "\"color_transfer\":\"smpte2084\"",
+        "\"sample_aspect_ratio\":\"4:3\"",
+        "\"side_data_type\":\"Display Matrix\"",
+        "\"rotation\":",
+        "\"pix_fmt\":\"yuv420p\"",
+        "\"disposition\":",
+        "\"comment\":\"caf\\ufffd\"",
+    };
+    char *json = NULL;
+    run_command("metadata-fixture", ARGC(argv), argv, 0);
+    const int ret = ffmpeg_probe_media_json("rotated.mp4", &json);
+    if (ret || !json) {
+        fail("metadata-probe", "probe failed");
+    } else {
+        for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
+            if (!strstr(json, fields[i])) {
+                fail("metadata-probe", fields[i]);
+                fprintf(stderr, "%s\n", json);
+            }
+        }
+        if (json_is_valid(json))
+            ok("metadata-probe-json");
+        else
+            fail("metadata-probe-json", "invalid JSON");
+    }
+    ffmpeg_free_string(json);
+    remove("rotated.mp4");
+}
+
 int main(void)
 {
     char *normal[] = {
@@ -612,6 +717,10 @@ int main(void)
         "-y",
         "-f", "lavfi",
         "-i", "testsrc2=duration=1:size=160x90:rate=5",
+        "-vf", "setsar=4/3,setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc",
+        "-color_trc", "smpte2084",
+        "-color_primaries", "bt2020",
+        "-colorspace", "bt2020nc",
         "-an",
         "-c:v", "libx264",
         "-preset", "ultrafast",
@@ -693,11 +802,16 @@ int main(void)
     remove("hls-cancel.ts");
 
     run_command("success", ARGC(normal), normal, 0);
+    run_pre_cancelled(ARGC(short_encode), short_encode);
+    run_diagnostics();
+    run_metadata_probe();
     run_command("reentry", ARGC(reentry), reentry, 0);
     run_signal_handler_preserved();
     run_overwrite_state_reset();
     run_cancelled("cancel", ARGC(long_encode), long_encode, 500000);
     run_cancelled("immediate-cancel", ARGC(long_encode), long_encode, 1000);
+    run_stalled_io(0);
+    run_stalled_io(1);
     if (write_file("hls-key.bin", hls_key, sizeof(hls_key)) != 0 ||
         write_file("hls-keyinfo.txt", hls_keyinfo, strlen(hls_keyinfo)) != 0) {
         fail("hls-aes-cancel", "failed to create HLS key fixtures");

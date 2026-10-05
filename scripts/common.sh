@@ -108,7 +108,8 @@ zimg_source_dir() {
 }
 
 boundary_patch() {
-  printf '%s/patches/ffmpeg-8.1/ffmpeg-ffi-boundary.patch\n' "$REPO_ROOT"
+  printf '%s/patches/ffmpeg-%s/ffmpeg-ffi-boundary.patch\n' \
+    "$REPO_ROOT" "${FFMPEG_VERSION%.*}"
 }
 
 target_is_mobile() {
@@ -305,6 +306,12 @@ write_manifest() {
   local output="$1"
   shift
   {
+    printf 'PACKAGING_REVISION=%s\n' "$(git -C "$REPO_ROOT" rev-parse HEAD)"
+    if [ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]; then
+      printf 'PACKAGING_DIRTY=true\n'
+    else
+      printf 'PACKAGING_DIRTY=false\n'
+    fi
     printf 'FFMPEG_TAG=%s\n' "$FFMPEG_TAG"
     printf 'FFMPEG_SHA256=%s\n' "$FFMPEG_SHA256"
     printf 'X264_REVISION=%s\n' "$X264_REVISION"

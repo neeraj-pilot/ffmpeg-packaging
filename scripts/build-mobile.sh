@@ -76,6 +76,7 @@ build_ios() {
   local ffmpeg_prefix="$target_root/ffmpeg-install"
 
   copy_clean_tree "$(x264_source_dir)" "$x264_src"
+  (cd "$x264_src" && patch -p1 < "$REPO_ROOT/patches/x264/encoder-open-cleanup.patch")
   copy_clean_tree "$(zimg_source_dir)" "$zimg_src"
 
   log "build x264 for $target"
@@ -170,6 +171,7 @@ build_ios() {
   cat > "$target_root/exported-symbols.txt" <<'EOF'
 _ffmpeg_session_new
 _ffmpeg_session_free
+_ffmpeg_session_output
 _ffmpeg_execute
 _ffmpeg_cancel
 _ffmpeg_probe_media_json
@@ -177,6 +179,8 @@ _ffmpeg_free_string
 EOF
 
   log "link ffmpeg_ffi.dylib for $target"
+  # libswscale/framepool.c includes libavfilter/framepool.c, so libswscale.a
+  # must not be force-loaded alongside libavfilter.a.
   "$IOS_CLANG" \
     -dynamiclib \
     -arch "$IOS_ARCH" \
@@ -191,7 +195,7 @@ EOF
     -Wl,-force_load,"$ffmpeg_build/libavformat/libavformat.a" \
     -Wl,-force_load,"$ffmpeg_build/libavcodec/libavcodec.a" \
     -Wl,-force_load,"$ffmpeg_build/libswresample/libswresample.a" \
-    -Wl,-force_load,"$ffmpeg_build/libswscale/libswscale.a" \
+    "$ffmpeg_build/libswscale/libswscale.a" \
     -Wl,-force_load,"$ffmpeg_build/libavutil/libavutil.a" \
     -L"$x264_prefix/lib" \
     -L"$zimg_prefix/lib" \
@@ -240,6 +244,7 @@ build_android() {
   local ffmpeg_prefix="$target_root/ffmpeg-install"
 
   copy_clean_tree "$(x264_source_dir)" "$x264_src"
+  (cd "$x264_src" && patch -p1 < "$REPO_ROOT/patches/x264/encoder-open-cleanup.patch")
   copy_clean_tree "$(zimg_source_dir)" "$zimg_src"
 
   log "build x264 for $target"
@@ -302,8 +307,9 @@ build_android() {
       --enable-libx264 \
       --enable-libzimg \
       --enable-zlib \
-      --enable-shared \
-      --disable-static \
+      --enable-static \
+      --disable-shared \
+      --enable-pic \
       --disable-doc \
       --disable-ffplay \
       --disable-v4l2-m2m \
@@ -315,14 +321,13 @@ build_android() {
 
   compile_probe_wrapper "$clang"
   mkdir -p "$package_root/jni/$ABI"
-  cp "$ffmpeg_prefix/lib"/libav*.so "$package_root/jni/$ABI/"
-  cp "$ffmpeg_prefix/lib"/libsw*.so "$package_root/jni/$ABI/"
   write_wrapper_objects
   cat > "$target_root/exports.map" <<'EOF'
 {
   global:
     ffmpeg_session_new;
     ffmpeg_session_free;
+    ffmpeg_session_output;
     ffmpeg_execute;
     ffmpeg_cancel;
     ffmpeg_probe_media_json;
@@ -331,17 +336,19 @@ build_android() {
     *;
 };
 EOF
+  local ffmpeg_libs
+  ffmpeg_libs=$(PKG_CONFIG_LIBDIR="$ffmpeg_prefix/lib/pkgconfig:$pkgconfig_dir" \
+    pkg-config --static --libs libavdevice libavfilter libavformat libavcodec libswresample libswscale libavutil)
+  local ffmpeg_link_args
+  read -r -a ffmpeg_link_args <<< "$ffmpeg_libs"
   "$clangxx" \
     -shared \
     -static-libstdc++ \
+    -Wl,--no-undefined \
     -Wl,-z,max-page-size=16384 \
     -Wl,--version-script="$target_root/exports.map" \
     @"$target_root/fftools-objs.txt" \
-    -L"$package_root/jni/$ABI" \
-    -lavdevice -lavfilter -lavformat -lavcodec -lswresample -lswscale -lavutil \
-    -L"$x264_prefix/lib" \
-    -L"$zimg_prefix/lib" \
-    -lx264 -lzimg -lz -lm \
+    -Wl,--start-group "${ffmpeg_link_args[@]}" -Wl,--end-group \
     -o "$package_root/jni/$ABI/libffmpeg_ffi.so"
   cp "$REPO_ROOT/include/ffmpeg_ffi.h" "$package_root/ffmpeg_ffi.h"
 }
